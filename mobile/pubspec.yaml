@@ -1,0 +1,20 @@
+name: eoffice_mobile
+description: eOffice Pro — aplikasi surat menyurat internal KSK Group (Android).
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Ditambahkan saat E09 dimulai: dio, flutter_riverpod, drift, firebase_messaging
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

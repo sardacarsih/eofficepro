@@ -1,0 +1,69 @@
+name: eofficepro
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: eoffice-postgres
+    environment:
+      POSTGRES_USER: eoffice
+      POSTGRES_PASSWORD: eoffice_dev_secret
+      POSTGRES_DB: eoffice
+    ports:
+      # 5433 di host karena 5432 sudah dipakai PostgreSQL native Windows
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eoffice -d eoffice"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: eoffice-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: eoffice-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: eoffice
+      MINIO_ROOT_PASSWORD: eoffice_dev_secret
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Bucket lampiran dibuat otomatis saat pertama kali compose up
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 eoffice eoffice_dev_secret &&
+      mc mb --ignore-existing local/eoffice-attachments &&
+      exit 0"
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

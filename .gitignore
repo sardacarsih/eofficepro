@@ -1,0 +1,31 @@
+# Environment
+.env
+*.local
+
+# Go
+backend/bin/
+backend/tmp/
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+mobile/android/.gradle/
+mobile/android/local.properties
+
+# Docker volumes (local dev)
+.volumes/
+
+# IDE / OS
+.agents/
+.claude/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

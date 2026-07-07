@@ -1,0 +1,30 @@
+BEGIN;
+
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS notification_preferences;
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS comments;
+DROP TABLE IF EXISTS read_receipts;
+DROP TABLE IF EXISTS disposition_recipients;
+DROP TABLE IF EXISTS dispositions;
+DROP TABLE IF EXISTS approval_actions;
+DROP TABLE IF EXISTS approval_steps;
+DROP TABLE IF EXISTS letter_attachments;
+DROP TABLE IF EXISTS letter_recipients;
+DROP TABLE IF EXISTS letter_versions;
+DROP TABLE IF EXISTS letters;
+DROP TABLE IF EXISTS approval_matrices;
+DROP TABLE IF EXISTS numbering_counters;
+DROP TABLE IF EXISTS numbering_formats;
+DROP TABLE IF EXISTS letter_templates;
+DROP TABLE IF EXISTS letter_types;
+DROP TABLE IF EXISTS delegations;
+DROP TABLE IF EXISTS user_roles;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS user_positions;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS positions;
+DROP TABLE IF EXISTS org_units;
+DROP TABLE IF EXISTS companies;
+
+COMMIT;
