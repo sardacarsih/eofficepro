@@ -633,7 +633,7 @@ export default function ComposePage() {
                   ? "Mulai draft baru"
                   : "Akun harus memiliki role pembuat surat dan jabatan aktif"
               }
-              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500"
+              className="rounded-lg bg-navy-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500"
             >
               Baru
             </button>
@@ -649,7 +649,7 @@ export default function ComposePage() {
                 onClick={() => openDraft(draft)}
                 className={`mb-2 w-full rounded-lg border px-3 py-2 text-left transition ${
                   form?.id === draft.id
-                    ? "border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40"
+                    ? "border-navy-300 bg-navy-50 dark:border-navy-700 dark:bg-navy-900/40"
                     : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"
                 }`}
               >
@@ -691,7 +691,7 @@ export default function ComposePage() {
                     {letter.subject}
                   </div>
                   {letter.letter_number && (
-                    <div className="mt-1 font-mono text-xs text-emerald-700 dark:text-emerald-300">
+                    <div className="mt-1 font-mono text-xs text-navy-600 dark:text-sky-400">
                       {letter.letter_number}
                     </div>
                   )}
@@ -744,14 +744,14 @@ export default function ComposePage() {
               <button
                 onClick={() => void handlePreview()}
                 disabled={!canSaveDraft || saveState === "saving" || previewing}
-                className="rounded-lg border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500 dark:text-emerald-300 dark:hover:bg-emerald-950"
+                className="rounded-lg border border-navy-600 px-4 py-2 text-sm font-semibold text-navy-700 transition hover:bg-navy-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-500 dark:text-sky-300 dark:hover:bg-navy-900"
               >
                 {previewing ? "Membuat PDF..." : "Preview PDF"}
               </button>
               <button
                 onClick={() => void handleSubmit()}
                 disabled={!canSaveDraft || saveState === "saving" || submitting}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg bg-navy-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {submitting ? "Mengajukan..." : "Ajukan"}
               </button>
@@ -792,7 +792,7 @@ export default function ComposePage() {
                       onChange={(e) =>
                         updateForm({ company_id: e.target.value, template_id: "" })
                       }
-                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       {companies.map((company) => (
                         <option key={company.id} value={company.id}>
@@ -806,7 +806,7 @@ export default function ComposePage() {
                     <select
                       value={form.letter_type_id}
                       onChange={(e) => selectLetterType(e.target.value)}
-                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       {letterTypes.map((letterType) => (
                         <option key={letterType.id} value={letterType.id}>
@@ -820,7 +820,7 @@ export default function ComposePage() {
                     <select
                       value={form.creator_position_id}
                       onChange={(e) => updateForm({ creator_position_id: e.target.value })}
-                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       {creatorPositions.map((position) => (
                         <option key={position.position_id} value={position.position_id}>
@@ -834,7 +834,7 @@ export default function ComposePage() {
                     <select
                       value={form.template_id}
                       onChange={(e) => applyTemplate(e.target.value)}
-                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       <option value="">Tanpa template</option>
                       {matchingTemplates.map((template) => (
@@ -854,7 +854,7 @@ export default function ComposePage() {
                             .value as LetterType["default_classification"],
                         })
                       }
-                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       <option value="biasa">Biasa</option>
                       <option value="terbatas">Terbatas</option>
@@ -868,7 +868,7 @@ export default function ComposePage() {
                       onChange={(e) =>
                         updateForm({ priority: e.target.value as DraftLetterPayload["priority"] })
                       }
-                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       <option value="normal">Normal</option>
                       <option value="urgent">Urgent</option>
@@ -883,7 +883,7 @@ export default function ComposePage() {
                       <select
                         value={recipientType}
                         onChange={(e) => setRecipientType(e.target.value as RecipientType)}
-                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                       >
                         <option value="to">To</option>
                         <option value="cc">CC</option>
@@ -893,7 +893,7 @@ export default function ComposePage() {
                         onChange={(e) =>
                           changeRecipientTargetType(e.target.value as RecipientTargetType)
                         }
-                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                       >
                         <option value="position">Jabatan</option>
                         <option value="org_unit">Unit</option>
@@ -901,7 +901,7 @@ export default function ComposePage() {
                       <select
                         value={selectedRecipientTargetID}
                         onChange={(e) => setRecipientTargetID(e.target.value)}
-                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                       >
                         {recipientOptions.map((option) => (
                           <option key={option.id} value={option.id}>
@@ -915,7 +915,7 @@ export default function ComposePage() {
                         type="button"
                         onClick={addRecipient}
                         disabled={!selectedRecipientTargetID}
-                        className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="rounded-lg bg-navy-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Tambah
                       </button>
@@ -969,7 +969,7 @@ export default function ComposePage() {
                     value={form.subject}
                     onChange={(e) => updateForm({ subject: e.target.value })}
                     maxLength={255}
-                    className="h-11 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    className="h-11 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                   />
                 </label>
 
@@ -991,7 +991,7 @@ export default function ComposePage() {
                         aria-disabled={!canUploadAttachment}
                         className={`inline-flex items-center rounded-lg px-3 py-2 text-xs font-semibold transition ${
                           canUploadAttachment
-                            ? "cursor-pointer bg-emerald-700 text-white hover:bg-emerald-800"
+                            ? "cursor-pointer bg-navy-700 text-white hover:bg-navy-800"
                             : "cursor-not-allowed border border-zinc-300 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500"
                         }`}
                       >

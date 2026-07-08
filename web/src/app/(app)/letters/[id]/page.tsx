@@ -117,7 +117,7 @@ export default function LetterDetailPage() {
                 <h1 className="text-2xl font-semibold text-zinc-950 dark:text-zinc-50">
                   {letter.subject}
                 </h1>
-                <p className="mt-2 font-mono text-sm text-emerald-700 dark:text-emerald-300">
+                <p className="mt-2 font-mono text-sm text-navy-600 dark:text-sky-400">
                   {letter.letter_number ?? "Nomor belum terbit"}
                 </p>
               </div>
@@ -221,7 +221,7 @@ export default function LetterDetailPage() {
                     href={letter.verify_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex rounded-lg border border-emerald-700 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500 dark:text-emerald-300 dark:hover:bg-emerald-950"
+                    className="inline-flex rounded-lg border border-navy-600 px-3 py-2 text-sm font-semibold text-navy-700 hover:bg-navy-50 dark:border-sky-500 dark:text-sky-300 dark:hover:bg-navy-900"
                   >
                     Buka Halaman Verifikasi
                   </a>

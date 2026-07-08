@@ -195,7 +195,7 @@ export default function LetterTypesPage() {
           </div>
           <button
             onClick={openCreate}
-            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800"
+            className="rounded-lg bg-navy-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800"
           >
             Tambah Jenis Surat
           </button>
@@ -355,7 +355,7 @@ export default function LetterTypesPage() {
                   }
                   required
                   maxLength={5}
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal uppercase text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal uppercase text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -371,7 +371,7 @@ export default function LetterTypesPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 sm:col-span-2">
@@ -384,7 +384,7 @@ export default function LetterTypesPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -402,7 +402,7 @@ export default function LetterTypesPage() {
                         : current,
                     )
                   }
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 >
                   <option value="biasa">Biasa</option>
                   <option value="terbatas">Terbatas</option>
@@ -418,7 +418,7 @@ export default function LetterTypesPage() {
                       current ? { ...current, is_active: e.target.checked } : current,
                     )
                   }
-                  className="h-4 w-4 rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
+                  className="h-4 w-4 rounded border-zinc-300 text-navy-700 focus:ring-navy-600"
                 />
                 Aktif
               </label>
@@ -445,7 +445,7 @@ export default function LetterTypesPage() {
               <button
                 type="submit"
                 disabled={busy}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg bg-navy-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy ? "Menyimpan..." : "Simpan"}
               </button>

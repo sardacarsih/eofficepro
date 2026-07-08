@@ -24,7 +24,7 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center bg-emerald-50/50 px-4 dark:bg-zinc-950">
+    <main className="flex flex-1 items-center justify-center bg-navy-50/50 px-4 dark:bg-zinc-950">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -47,7 +47,7 @@ export default function ForgotPasswordPage() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoFocus
-              className="rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
             />
           </label>
 
@@ -65,14 +65,14 @@ export default function ForgotPasswordPage() {
           <button
             type="submit"
             disabled={loading || !!message}
-            className="rounded-lg bg-emerald-700 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:opacity-60"
+            className="rounded-lg bg-navy-700 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:opacity-60"
           >
             {loading ? "Mengirim..." : "Kirim Tautan Reset"}
           </button>
 
           <Link
             href="/login"
-            className="text-center text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+            className="text-center text-sm text-navy-600 hover:underline dark:text-sky-400"
           >
             Kembali ke login
           </Link>

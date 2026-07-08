@@ -90,7 +90,7 @@ export default function ApprovalTable({
                 <td className="py-3">
                   <Link
                     href="/approvals"
-                    className="inline-flex rounded-lg bg-navy-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-navy-600"
+                    className="inline-flex rounded-lg bg-navy-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-navy-800"
                   >
                     Review
                   </Link>

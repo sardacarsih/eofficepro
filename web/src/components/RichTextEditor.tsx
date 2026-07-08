@@ -31,7 +31,7 @@ function ToolbarButton({ active = false, disabled = false, label, onClick }: Too
       disabled={disabled}
       className={`h-8 min-w-8 rounded-md border px-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
         active
-          ? "border-emerald-700 bg-emerald-700 text-white"
+          ? "border-navy-700 bg-navy-700 text-white"
           : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
       }`}
     >
@@ -179,7 +179,7 @@ export default function RichTextEditor({ value, onChange }: RichTextEditorProps)
   }, [editor, value]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-zinc-300 bg-white focus-within:border-emerald-600 focus-within:ring-2 focus-within:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950">
+    <div className="overflow-hidden rounded-lg border border-zinc-300 bg-white focus-within:border-navy-500 focus-within:ring-2 focus-within:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950">
       <Toolbar editor={editor} />
       <EditorContent editor={editor} className="tiptap-editor" />
     </div>

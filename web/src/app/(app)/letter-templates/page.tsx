@@ -219,7 +219,7 @@ export default function LetterTemplatesPage() {
           <button
             onClick={openCreate}
             disabled={letterTypes.length === 0 || companies.length === 0}
-            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-lg bg-navy-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Tambah Template
           </button>
@@ -387,7 +387,7 @@ export default function LetterTemplatesPage() {
                       current ? { ...current, letter_type_id: e.target.value } : current,
                     )
                   }
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 >
                   {letterTypes.map((letterType) => (
                     <option key={letterType.id} value={letterType.id}>
@@ -405,7 +405,7 @@ export default function LetterTemplatesPage() {
                       current ? { ...current, company_id: e.target.value } : current,
                     )
                   }
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 >
                   {companies.map((company) => (
                     <option key={company.id} value={company.id}>
@@ -426,7 +426,7 @@ export default function LetterTemplatesPage() {
                       current ? { ...current, version: e.target.value } : current,
                     )
                   }
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 md:col-span-2">
@@ -439,7 +439,7 @@ export default function LetterTemplatesPage() {
                     )
                   }
                   spellCheck={false}
-                  className="min-h-72 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-xs font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="min-h-72 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-xs font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 md:col-span-2">
@@ -451,7 +451,7 @@ export default function LetterTemplatesPage() {
                       current ? { ...current, body_skeleton: e.target.value } : current,
                     )
                   }
-                  className="min-h-72 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-xs font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="min-h-72 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-xs font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex items-center gap-3 rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm font-semibold text-zinc-800 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200">
@@ -463,7 +463,7 @@ export default function LetterTemplatesPage() {
                       current ? { ...current, is_active: e.target.checked } : current,
                     )
                   }
-                  className="h-4 w-4 rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
+                  className="h-4 w-4 rounded border-zinc-300 text-navy-700 focus:ring-navy-600"
                 />
                 Aktif
               </label>
@@ -490,7 +490,7 @@ export default function LetterTemplatesPage() {
               <button
                 type="submit"
                 disabled={busy}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg bg-navy-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy ? "Menyimpan..." : "Simpan"}
               </button>

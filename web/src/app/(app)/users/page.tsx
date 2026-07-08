@@ -296,7 +296,7 @@ export default function UsersPage() {
             </label>
             <button
               onClick={openCreate}
-              className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800"
+              className="rounded-lg bg-navy-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800"
             >
               Tambah Pengguna
             </button>
@@ -502,7 +502,7 @@ export default function UsersPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -516,7 +516,7 @@ export default function UsersPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 sm:col-span-2">
@@ -534,7 +534,7 @@ export default function UsersPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -551,7 +551,7 @@ export default function UsersPage() {
                         : current,
                     )
                   }
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 >
                   <option value="active">Aktif</option>
                   <option value="inactive">Nonaktif</option>
@@ -576,7 +576,7 @@ export default function UsersPage() {
                   required={!editing}
                   minLength={editing ? undefined : 10}
                   placeholder={editing ? "Kosongkan jika tidak diganti" : "Minimal 10 karakter"}
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
 
@@ -593,7 +593,7 @@ export default function UsersPage() {
                         key={role.value}
                         className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
                           checked
-                            ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                            ? "border-navy-600 bg-navy-50 text-navy-800 dark:bg-navy-900 dark:text-navy-200"
                             : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800"
                         }`}
                       >
@@ -601,7 +601,7 @@ export default function UsersPage() {
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleRole(role.value)}
-                          className="h-4 w-4 rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
+                          className="h-4 w-4 rounded border-zinc-300 text-navy-700 focus:ring-navy-600"
                         />
                         {role.label}
                       </label>
@@ -626,7 +626,7 @@ export default function UsersPage() {
                           : current,
                       )
                     }
-                    className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                   >
                     <option value="">Belum ditempatkan</option>
                     {positions.map((position) => (
@@ -653,7 +653,7 @@ export default function UsersPage() {
                       )
                     }
                     disabled={!form.position_id}
-                    className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                   >
                     <option value="definitive">Definitif</option>
                     <option value="plt">Plt</option>
@@ -687,7 +687,7 @@ export default function UsersPage() {
               <button
                 type="submit"
                 disabled={busy}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg bg-navy-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy ? "Menyimpan..." : "Simpan"}
               </button>
