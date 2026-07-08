@@ -82,6 +82,7 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	authed.GET("/letters/drafts/:id/attachments", h.ListDraftAttachments)
 	authed.GET("/approvals/inbox", h.ListApprovalInbox)
 	authed.POST("/approvals/steps/:id/actions", h.ActApprovalStep)
+	authed.GET("/dashboard/summary", h.DashboardSummary)
 	authed.GET("/notifications", h.ListNotifications)
 	authed.POST("/notifications/:id/read", h.MarkNotificationRead)
 	authed.POST("/notifications/read-all", h.MarkAllNotificationsRead)

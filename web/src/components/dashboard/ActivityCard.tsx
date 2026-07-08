@@ -54,6 +54,11 @@ export default function ActivityCard({
           <ArrowRightIcon className="h-3.5 w-3.5" />
         </Link>
       </div>
+      {activities.length === 0 && (
+        <p className="flex flex-1 items-center justify-center py-8 text-sm text-zinc-400 dark:text-zinc-500">
+          Belum ada aktivitas.
+        </p>
+      )}
       <ul className="flex flex-1 flex-col divide-y divide-zinc-100 dark:divide-zinc-800">
         {activities.map((activity) => {
           const meta = ACTIVITY_ICON[activity.icon];

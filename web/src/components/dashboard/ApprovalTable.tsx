@@ -63,6 +63,16 @@ export default function ApprovalTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {items.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="py-8 text-center text-sm text-zinc-400 dark:text-zinc-500"
+                >
+                  Tidak ada dokumen yang menunggu persetujuan Anda.
+                </td>
+              </tr>
+            )}
             {items.map((item, index) => (
               <tr
                 key={item.id}

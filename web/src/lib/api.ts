@@ -648,6 +648,33 @@ export async function resetPassword(
   return data.message;
 }
 
+// ---- Dashboard ----
+
+export interface DashboardSummary {
+  stats: {
+    inbox_unread: number;
+    sent_this_month: number;
+    pending_approvals: number;
+    archived_total: number;
+  };
+  incoming_trend: { date: string; total: number }[];
+  recent_activities: {
+    id: string;
+    event_type: string;
+    title: string;
+    created_at: string;
+  }[];
+  pending_approvals: {
+    step_id: string;
+    subject: string;
+    creator_name: string;
+    updated_at: string;
+  }[];
+}
+
+export const getDashboardSummary = () =>
+  apiFetch<DashboardSummary>("/dashboard/summary");
+
 // ---- Notifikasi in-app ----
 
 export interface AppNotification {
