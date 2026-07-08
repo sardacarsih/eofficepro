@@ -154,6 +154,17 @@ func (h *Handler) resolveApprovalRoute(ctx context.Context, tx pgx.Tx, letterTyp
 			return approvalRoute{}, errors.New("gagal membaca rantai atasan")
 		}
 
+		if position.PositionType == "sub_dept_head" {
+			hasActiveHolder, err := approvalPositionHasActiveHolder(ctx, tx, position.ID)
+			if err != nil {
+				return approvalRoute{}, errors.New("gagal memvalidasi pemegang Sub Department Head")
+			}
+			if !hasActiveHolder {
+				nextID = position.ReportsTo
+				continue
+			}
+		}
+
 		stepOrder := len(steps) + 1
 		steps = append(steps, approvalRouteStep{
 			StepOrder:    stepOrder,
@@ -177,6 +188,21 @@ func (h *Handler) resolveApprovalRoute(ctx context.Context, tx pgx.Tx, letterTyp
 		}
 	}
 	return approvalRoute{SLAHours: slaHours, Steps: steps}, nil
+}
+
+func approvalPositionHasActiveHolder(ctx context.Context, tx pgx.Tx, positionID string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM user_positions assignment
+			JOIN users holder ON holder.id = assignment.user_id
+			WHERE assignment.position_id = $1
+			  AND current_date >= assignment.valid_from
+			  AND (assignment.valid_to IS NULL OR current_date < assignment.valid_to)
+			  AND holder.status = 'active'
+		)`, positionID).Scan(&exists)
+	return exists, err
 }
 
 type numberingContext struct {
@@ -383,7 +409,7 @@ func validateApprovalRouteHasActiveHolders(ctx context.Context, tx pgx.Tx, route
 				JOIN users u ON u.id = up.user_id
 				WHERE up.position_id = $1
 				  AND current_date >= up.valid_from
-				  AND (up.valid_to IS NULL OR current_date <= up.valid_to)
+				  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 				  AND u.status = 'active'
 			)`, step.PositionID).Scan(&exists)
 		if err != nil {
@@ -453,7 +479,7 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 		) a ON true
 		WHERE up.user_id = $1
 		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date <= up.valid_to)
+		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 		  AND s.status = 'waiting'
 		  AND l.status = 'in_approval'
 		ORDER BY l.priority DESC, l.updated_at ASC`, userID)
@@ -549,7 +575,7 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 		WHERE s.id = $1
 		  AND up.user_id = $2
 		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date <= up.valid_to)
+		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 		  AND s.status = 'waiting'
 		  AND l.status = 'in_approval'
 		FOR UPDATE OF s`, stepID, userID).Scan(&letterID, &stepOrder)
@@ -619,12 +645,28 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyelesaikan approval"})
 				return
 			}
-		} else if _, err := tx.Exec(ctx, `
-			UPDATE letters
-			SET current_step_order = $2, updated_at = now()
-			WHERE id = $1`, letterID, nextOrder); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui surat"})
-			return
+			if err := distributePublishedLetter(ctx, tx, letterID, publishedAt); err != nil {
+				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mendistribusikan surat"})
+				return
+			}
+			if err := notifyApprovalResult(ctx, tx, letterID, letterStatus); err != nil {
+				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi hasil approval"})
+				return
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE letters
+				SET current_step_order = $2, updated_at = now()
+				WHERE id = $1`, letterID, nextOrder); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui surat"})
+				return
+			}
+			if err := notifyWaitingApprovers(ctx, tx, letterID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi approval"})
+				return
+			}
 		}
 	} else {
 		if _, err := tx.Exec(ctx, `
@@ -643,6 +685,10 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 			SET status = $2, current_step_order = NULL, updated_at = now()
 			WHERE id = $1`, letterID, letterStatus); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui status surat"})
+			return
+		}
+		if err := notifyApprovalResult(ctx, tx, letterID, letterStatus); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi hasil approval"})
 			return
 		}
 	}

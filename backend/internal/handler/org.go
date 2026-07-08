@@ -59,7 +59,7 @@ type orgUnitRequest struct {
 	ParentID  *string `json:"parent_id"`
 	Code      string  `json:"code" binding:"required"`
 	Name      string  `json:"name" binding:"required"`
-	UnitLevel string  `json:"unit_level" binding:"required,oneof=directorate biro department section division office"`
+	UnitLevel string  `json:"unit_level" binding:"required,oneof=directorate biro department division office"`
 	Region    *string `json:"region" binding:"omitempty,oneof=HO REG1 REG2 REPO_JKT REPO_PKB"`
 }
 

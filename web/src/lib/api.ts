@@ -171,14 +171,62 @@ export interface Position {
   title: string;
   position_type: string;
   is_approver: boolean;
+  is_active: boolean;
   reports_to: string | null;
+  reports_to_title: string;
   org_unit_id: string;
   org_unit_name: string;
+  org_unit_level: string;
   holder_name: string;
   holder_user_id: string;
+  identity_locked: boolean;
 }
 
-export const listPositions = () => apiFetch<{ positions: Position[] }>("/positions");
+export interface PositionPayload {
+  org_unit_id: string;
+  title: string;
+  position_type: string;
+  reports_to: string | null;
+  is_approver: boolean;
+}
+
+export interface PositionDeactivationImpact {
+  active_assignments: number;
+  active_subordinates: number;
+  active_delegations: number;
+  active_drafts: number;
+  active_approvals: number;
+  active_dispositions: number;
+  can_deactivate: boolean;
+}
+
+export const listPositions = (includeInactive = false) =>
+  apiFetch<{ positions: Position[] }>(
+    `/positions${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export const createPosition = (payload: PositionPayload) =>
+  apiFetch<{ id: string }>("/positions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updatePosition = (id: string, payload: PositionPayload) =>
+  apiFetch<{ id: string }>(`/positions/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const getPositionDeactivationImpact = (id: string) =>
+  apiFetch<{ impact: PositionDeactivationImpact }>(
+    `/positions/${id}/deactivation-impact`,
+  );
+
+export const deactivatePosition = (id: string) =>
+  apiFetch<{ id: string }>(`/positions/${id}`, { method: "DELETE" });
+
+export const activatePosition = (id: string) =>
+  apiFetch<{ id: string }>(`/positions/${id}/activate`, { method: "POST" });
 
 export interface AssignPositionPayload {
   user_id: string;
@@ -189,6 +237,11 @@ export const assignPosition = (positionID: string, payload: AssignPositionPayloa
   apiFetch<{ id: string }>(`/positions/${positionID}/assign`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+
+export const endUserPositionAssignment = (assignmentID: string) =>
+  apiFetch<{ id: string }>(`/user-positions/${assignmentID}`, {
+    method: "DELETE",
   });
 
 export interface Company {
@@ -313,6 +366,8 @@ export interface DraftLetter {
     | "archived";
   creator_position_id: string;
   creator_position_title: string;
+  on_behalf_of_position_id: string | null;
+  on_behalf_of_title: string | null;
   version: number;
   body_html: string;
   body_plain: string;
@@ -332,6 +387,7 @@ export interface DraftLetterPayload {
   company_id: string;
   letter_type_id: string;
   creator_position_id: string;
+  on_behalf_of_position_id?: string | null;
   subject: string;
   classification?: LetterType["default_classification"];
   priority: DraftLetter["priority"];
@@ -419,6 +475,34 @@ export const previewDraftLetter = (id: string) =>
 export const submitDraftLetter = (id: string) =>
   apiFetch<SubmitDraftResult>(`/letters/drafts/${id}/submit`, { method: "POST" });
 
+// ---- Inbox surat masuk ----
+
+export interface IncomingLetter {
+  id: string;
+  recipient_type: "to" | "cc";
+  company_code: string;
+  letter_type_code: string;
+  letter_number: string | null;
+  subject: string;
+  classification: DraftLetter["classification"];
+  priority: DraftLetter["priority"];
+  creator_name: string;
+  creator_position_title: string;
+  body_plain: string;
+  attachment_count: number;
+  is_read: boolean;
+  first_read_at: string | null;
+  last_read_at: string | null;
+  delivered_at: string | null;
+  published_at: string | null;
+  updated_at: string;
+}
+
+export const listIncomingLetters = (box?: "to" | "cc") =>
+  apiFetch<{ letters: IncomingLetter[] }>(
+    `/letters/inbox${box ? `?box=${box}` : ""}`,
+  );
+
 // ---- Approval surat ----
 
 export interface ApprovalInboxItem {
@@ -497,6 +581,7 @@ export interface LetterDetail {
   status: DraftLetter["status"];
   creator_name: string;
   creator_position_title: string;
+  on_behalf_of_title: string | null;
   version: number;
   body_html: string;
   body_plain: string;
@@ -563,6 +648,49 @@ export async function resetPassword(
   return data.message;
 }
 
+// ---- Notifikasi in-app ----
+
+export interface AppNotification {
+  id: string;
+  event_type: "approval_waiting" | "approval_result" | "letter_incoming" | string;
+  letter_id: string | null;
+  title: string;
+  body: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export const listNotifications = (limit = 15) =>
+  apiFetch<{ notifications: AppNotification[]; unread_count: number }>(
+    `/notifications?limit=${limit}`,
+  );
+
+export const markNotificationRead = (id: string) =>
+  apiFetch<{ id: string; updated: boolean }>(`/notifications/${id}/read`, {
+    method: "POST",
+  });
+
+export const markAllNotificationsRead = () =>
+  apiFetch<{ marked_read: number }>("/notifications/read-all", {
+    method: "POST",
+  });
+
+// ---- Ubah password (pengguna login) ----
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<string> {
+  const data = await apiFetch<{ message: string }>("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  return data.message;
+}
+
 // ---- Manajemen pengguna (admin) ----
 
 export interface UserRow {
@@ -572,6 +700,18 @@ export interface UserRow {
   full_name: string;
   status: string;
   roles: string[];
+  positions: UserPositionAssignment[];
+}
+
+export interface UserPositionAssignment {
+  assignment_id: string;
+  position_id: string;
+  title: string;
+  position_type: string;
+  org_unit_name: string;
+  assignment_type: "definitive" | "plt" | "plh";
+  valid_from: string;
+  valid_to: string | null;
 }
 
 export interface UserPayload {
@@ -581,6 +721,50 @@ export interface UserPayload {
   status: "active" | "inactive" | "locked";
   roles: string[];
   password?: string;
+  positions: UserPositionPayload[];
+}
+
+export interface UserPositionPayload {
+  position_id: string;
+  assignment_type: "definitive" | "plt" | "plh";
+}
+
+export interface DeactivationImpact {
+  positions: {
+    position_id: string;
+    title: string;
+    org_unit_name: string;
+    assignment_type: UserPositionPayload["assignment_type"];
+  }[];
+  drafts: {
+    letter_id: string;
+    subject: string;
+    creator_position_id: string;
+    creator_position_title: string;
+    status: string;
+  }[];
+  approval_steps: {
+    step_id: string;
+    letter_id: string;
+    subject: string;
+    position_id: string;
+    position_title: string;
+    status: string;
+  }[];
+  has_impact: boolean;
+}
+
+export interface DeactivateUserPayload {
+  position_replacements: {
+    position_id: string;
+    replacement_user_id: string;
+    assignment_type: UserPositionPayload["assignment_type"];
+  }[];
+  draft_transfers: {
+    letter_id: string;
+    replacement_user_id: string;
+    replacement_position_id: string;
+  }[];
 }
 
 export interface ImportResult {
@@ -603,8 +787,16 @@ export const updateUser = (id: string, payload: UserPayload) =>
     body: JSON.stringify(payload),
   });
 
-export const deactivateUser = (id: string) =>
-  apiFetch<{ id: string }>(`/users/${id}`, { method: "DELETE" });
+export const getUserDeactivationImpact = (id: string) =>
+  apiFetch<{ impact: DeactivationImpact }>(`/users/${id}/deactivation-impact`);
+
+export const deactivateUser = (id: string, payload?: DeactivateUserPayload) =>
+  payload
+    ? apiFetch<{ id: string }>(`/users/${id}/deactivate`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+    : apiFetch<{ id: string }>(`/users/${id}`, { method: "DELETE" });
 
 export async function importUsers(file: File): Promise<ImportResult> {
   const form = new FormData();

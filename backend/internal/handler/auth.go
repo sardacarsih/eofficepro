@@ -193,7 +193,7 @@ func (h *Handler) Me(c *gin.Context) {
 		JOIN org_units ou ON ou.id = p.org_unit_id
 		WHERE up.user_id = $1
 		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date <= up.valid_to)`, userID)
+		  AND (up.valid_to IS NULL OR current_date < up.valid_to)`, userID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

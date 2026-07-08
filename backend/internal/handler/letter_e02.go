@@ -344,11 +344,16 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO approval_steps
 				(letter_id, step_order, approver_position_id, flow_group, status, sla_deadline)
-			VALUES ($1, $2, $3, $4, $5, now() + ($6::text || ' hours')::interval)`,
+			VALUES ($1, $2, $3, $4, $5, now() + make_interval(hours => $6::int))`,
 			letterID, step.StepOrder, step.PositionID, step.FlowGroup, status, route.SLAHours); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan rute approval"})
 			return
 		}
+	}
+
+	if err := notifyWaitingApprovers(ctx, tx, letterID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi approval"})
+		return
 	}
 
 	qrToken, err := h.uniqueQRToken(ctx, tx)

@@ -39,6 +39,7 @@ interface ComposerForm {
   letter_type_id: string;
   template_id: string;
   creator_position_id: string;
+  on_behalf_of_position_id: string;
   subject: string;
   classification: LetterType["default_classification"];
   priority: DraftLetterPayload["priority"];
@@ -54,14 +55,20 @@ function emptyForm(
   companies: Company[],
   letterTypes: LetterType[],
   user: User | null,
+  positions: Position[] = [],
 ): ComposerForm {
   const firstType = letterTypes[0];
+  const creatorPositionID = user?.positions?.[0]?.position_id ?? "";
   return {
     id: null,
     company_id: companies[0]?.id ?? "",
     letter_type_id: firstType?.id ?? "",
     template_id: "",
-    creator_position_id: user?.positions?.[0]?.position_id ?? "",
+    creator_position_id: creatorPositionID,
+    on_behalf_of_position_id: onBehalfIDForCreatorPosition(
+      creatorPositionID,
+      positions,
+    ),
     subject: "",
     classification: firstType?.default_classification ?? "biasa",
     priority: "normal",
@@ -71,13 +78,16 @@ function emptyForm(
   };
 }
 
-function draftToForm(draft: DraftLetter): ComposerForm {
+function draftToForm(draft: DraftLetter, positions: Position[] = []): ComposerForm {
   return {
     id: draft.id,
     company_id: draft.company_id,
     letter_type_id: draft.letter_type_id,
     template_id: "",
     creator_position_id: draft.creator_position_id,
+    on_behalf_of_position_id:
+      draft.on_behalf_of_position_id ??
+      onBehalfIDForCreatorPosition(draft.creator_position_id, positions),
     subject: draft.subject,
     classification: draft.classification,
     priority: draft.priority,
@@ -85,6 +95,17 @@ function draftToForm(draft: DraftLetter): ComposerForm {
     recipients: draft.recipients,
     version: draft.version,
   };
+}
+
+function onBehalfIDForCreatorPosition(
+  creatorPositionID: string,
+  positions: Position[],
+): string {
+  const creatorPosition = positions.find(
+    (position) => position.id === creatorPositionID,
+  );
+  if (creatorPosition?.position_type !== "secretary") return "";
+  return creatorPosition.reports_to ?? "";
 }
 
 function validForSave(form: ComposerForm): boolean {
@@ -107,6 +128,7 @@ function compactPayload(form: ComposerForm): DraftLetterPayload {
     company_id: form.company_id,
     letter_type_id: form.letter_type_id,
     creator_position_id: form.creator_position_id,
+    on_behalf_of_position_id: form.on_behalf_of_position_id || null,
     subject: form.subject.trim(),
     classification: form.classification,
     priority: form.priority,
@@ -289,7 +311,14 @@ export default function ComposePage() {
         setTemplates(templateData.letter_templates);
         setDrafts(draftData.letters);
         setMyLetters(myLetterData.letters);
-        setForm(emptyForm(companyData.companies, typeData.letter_types, me));
+        setForm(
+          emptyForm(
+            companyData.companies,
+            typeData.letter_types,
+            me,
+            positionData.positions,
+          ),
+        );
         setRecipientTargetID(positionData.positions[0]?.id ?? "");
         },
       )
@@ -318,6 +347,19 @@ export default function ComposePage() {
     () => recipientPositions.find((position) => position.id === form?.creator_position_id),
     [form?.creator_position_id, recipientPositions],
   );
+  const onBehalfPosition = form?.on_behalf_of_position_id
+    ? recipientPositions.find(
+        (position) => position.id === form.on_behalf_of_position_id,
+      )
+    : undefined;
+
+  const secretaryReportsToPosition = useMemo(() => {
+    if (selectedCreatorPosition?.position_type !== "secretary") return undefined;
+    if (!selectedCreatorPosition.reports_to) return undefined;
+    return recipientPositions.find(
+      (position) => position.id === selectedCreatorPosition.reports_to,
+    );
+  }, [recipientPositions, selectedCreatorPosition]);
 
   const creatorDirectorateID = useMemo(
     () => positionDirectorateID(selectedCreatorPosition, orgUnitByID),
@@ -360,8 +402,18 @@ export default function ComposePage() {
       );
   }, [form, orgUnitByID, recipientPositions, selectedCreatorPosition]);
 
-  const recipientOptions =
-    recipientTargetType === "position" ? filteredRecipientPositions : filteredRecipientOrgUnits;
+  const recipientOptions = useMemo(() => {
+    const source =
+      recipientTargetType === "position"
+        ? filteredRecipientPositions
+        : filteredRecipientOrgUnits;
+    const seen = new Set<string>();
+    return source.filter((option) => {
+      if (seen.has(option.id)) return false;
+      seen.add(option.id);
+      return true;
+    });
+  }, [filteredRecipientOrgUnits, filteredRecipientPositions, recipientTargetType]);
   const selectedRecipientTargetID = recipientOptions.some(
     (option) => option.id === recipientTargetID,
   )
@@ -460,9 +512,10 @@ export default function ComposePage() {
   }
 
   function openDraft(draft: DraftLetter) {
-    setForm(draftToForm(draft));
+    const nextForm = draftToForm(draft, recipientPositions);
+    setForm(nextForm);
     setAttachments([]);
-    setDirty(false);
+    setDirty(nextForm.on_behalf_of_position_id !== (draft.on_behalf_of_position_id ?? ""));
     setSaveState("idle");
     setLastSavedAt(new Date(draft.updated_at).toLocaleTimeString("id-ID"));
     setSuccess(null);
@@ -483,7 +536,7 @@ export default function ComposePage() {
       return;
     }
 
-    setForm(emptyForm(companies, letterTypes, me));
+    setForm(emptyForm(companies, letterTypes, me, recipientPositions));
     setAttachments([]);
     setDirty(false);
     setSaveState("idle");
@@ -596,7 +649,7 @@ export default function ComposePage() {
       const result = await submitDraftLetter(draftID);
       await Promise.all([reloadDrafts(), reloadMyLetters()]);
       setAttachments([]);
-      setForm(emptyForm(companies, letterTypes, me));
+      setForm(emptyForm(companies, letterTypes, me, recipientPositions));
       setDirty(false);
       setSaveState("idle");
       setLastSavedAt(null);
@@ -643,9 +696,9 @@ export default function ComposePage() {
             {!loading && drafts.length === 0 && (
               <p className="px-2 py-4 text-sm text-zinc-500">Belum ada draft.</p>
             )}
-            {drafts.map((draft) => (
+            {drafts.map((draft, index) => (
               <button
-                key={draft.id}
+                key={`${draft.id}-${index}`}
                 onClick={() => openDraft(draft)}
                 className={`mb-2 w-full rounded-lg border px-3 py-2 text-left transition ${
                   form?.id === draft.id
@@ -681,9 +734,9 @@ export default function ComposePage() {
                   Belum ada surat yang diajukan.
                 </p>
               )}
-              {submittedLetters.map((letter) => (
+              {submittedLetters.map((letter, index) => (
                 <Link
-                  key={letter.id}
+                  key={`${letter.id}-${index}`}
                   href={`/letters/${letter.id}`}
                   className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 transition hover:bg-white dark:border-zinc-800 dark:bg-zinc-950/40 dark:hover:bg-zinc-900"
                 >
@@ -819,7 +872,15 @@ export default function ComposePage() {
                     Jabatan Pembuat
                     <select
                       value={form.creator_position_id}
-                      onChange={(e) => updateForm({ creator_position_id: e.target.value })}
+                      onChange={(e) =>
+                        updateForm({
+                          creator_position_id: e.target.value,
+                          on_behalf_of_position_id: onBehalfIDForCreatorPosition(
+                            e.target.value,
+                            recipientPositions,
+                          ),
+                        })
+                      }
                       className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                     >
                       {creatorPositions.map((position) => (
@@ -829,6 +890,21 @@ export default function ComposePage() {
                       ))}
                     </select>
                   </label>
+                  {selectedCreatorPosition?.position_type === "secretary" && (
+                    <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm dark:border-cyan-900 dark:bg-cyan-950/40 md:col-span-2">
+                      <p className="font-semibold text-cyan-900 dark:text-cyan-100">
+                        Atas Nama
+                      </p>
+                      <p className="mt-1 break-words text-cyan-800 dark:text-cyan-200">
+                        {onBehalfPosition?.title ??
+                          secretaryReportsToPosition?.title ??
+                          "Jabatan atasan belum tersedia"}
+                      </p>
+                      <p className="mt-1 text-xs text-cyan-700 dark:text-cyan-300">
+                        Surat tetap dibuat oleh Secretary, dengan konteks a.n. jabatan atasan.
+                      </p>
+                    </div>
+                  )}
                   <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 md:col-span-2">
                     Template
                     <select
@@ -904,7 +980,10 @@ export default function ComposePage() {
                         className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                       >
                         {recipientOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
+                          <option
+                            key={`${recipientTargetType}-${option.id}`}
+                            value={option.id}
+                          >
                             {"title" in option
                               ? `${option.title} · ${option.org_unit_name}`
                               : `${option.name} · ${option.code}`}

@@ -4,8 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { User } from "@/lib/api";
 import {
+  BriefcaseIcon,
   BuildingIcon,
   CheckCircleIcon,
+  InboxIcon,
   LayersIcon,
   LayoutDashboardIcon,
   LogOutIcon,
@@ -26,6 +28,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboardIcon, roles: null },
+  { href: "/inbox", label: "Surat Masuk", icon: InboxIcon, roles: null },
   {
     href: "/compose",
     label: "Tulis Surat",
@@ -39,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
     roles: ["admin", "approver"],
   },
   { href: "/organization", label: "Organisasi", icon: BuildingIcon, roles: null },
+  { href: "/positions", label: "Jabatan", icon: BriefcaseIcon, roles: ["admin"] },
   { href: "/users", label: "Pengguna", icon: UsersIcon, roles: ["admin"] },
   { href: "/letter-types", label: "Jenis Surat", icon: TagIcon, roles: ["admin"] },
   {

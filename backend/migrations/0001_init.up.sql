@@ -22,7 +22,7 @@ CREATE TABLE org_units (
     code        varchar(20) NOT NULL,
     name        varchar(150) NOT NULL,
     unit_level  varchar(20) NOT NULL CHECK (unit_level IN
-                  ('directorate','biro','department','section','division','office')),
+                  ('directorate','biro','department','division','office')),
     region      varchar(10) CHECK (region IN ('HO','REG1','REG2','REPO_JKT','REPO_PKB')),
     path        varchar(500) NOT NULL DEFAULT '',  -- materialized path utk query hierarki
     valid_from  date NOT NULL DEFAULT current_date,
@@ -39,7 +39,7 @@ CREATE TABLE positions (
     title         varchar(150) NOT NULL,
     position_type varchar(30) NOT NULL CHECK (position_type IN
                     ('president_director','vp_director','director','gm','dept_head',
-                     'section_head','division_head','assistant','secretary','staff','auditor')),
+                     'sub_dept_head','division_head','assistant','secretary','staff','auditor')),
     reports_to    uuid REFERENCES positions(id),  -- rantai atasan = dasar rute approval
     is_approver   boolean NOT NULL DEFAULT false,
     is_active     boolean NOT NULL DEFAULT true

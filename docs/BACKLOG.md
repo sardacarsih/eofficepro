@@ -37,7 +37,7 @@
 |----|--------|-----------|----|
 | E01-1 | Login email/NIK + password, kebijakan kekuatan, lockout 5× gagal | Sesuai P0-10 | 5 |
 | E01-2 | Manajemen sesi: JWT/refresh token, timeout, logout semua perangkat | | 3 |
-| E01-3 | CRUD struktur organisasi hierarkis (Direktorat→Biro→Dept→Section→Division) + atribut lokasi (HO/Reg I/Reg II/Rep. Office) | Snapshot versi struktur; Rev. 8 ter-input penuh | 8 |
+| E01-3 | CRUD struktur organisasi hierarkis (Direktorat→Biro→Dept→Division) + atribut lokasi (HO/Reg I/Reg II/Rep. Office) | Snapshot versi struktur; struktur aktif ter-input penuh | 8 |
 | E01-4 | Master jabatan & penempatan pengguna→jabatan (dukung rangkap/Plt) | Mutasi pegawai tidak mengubah surat historis | 5 |
 | E01-5 | RBAC: role Pembuat/Approver/Sekretaris/Auditor/Admin + permission matrix | Uji akses negatif otomatis | 5 |
 | E01-6 | Import pengguna via Excel + validasi & report error per baris | 500 baris < 1 menit | 3 |

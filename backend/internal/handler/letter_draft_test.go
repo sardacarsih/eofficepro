@@ -28,10 +28,17 @@ func TestValidateDraftRecipientDirectoratePolicy(t *testing.T) {
 			targetDir:   &dirA,
 		},
 		{
-			name:        "section_head_same_directorate_allowed",
-			creatorType: "section_head",
+			name:        "division_head_same_directorate_position_allowed",
+			creatorType: "division_head",
 			targetType:  "position",
 			targetDir:   &dirA,
+		},
+		{
+			name:        "division_head_cross_directorate_rejected",
+			creatorType: "division_head",
+			targetType:  "position",
+			targetDir:   &dirB,
+			wantErr:     true,
 		},
 		{
 			name:        "division_head_same_directorate_allowed",
@@ -49,6 +56,12 @@ func TestValidateDraftRecipientDirectoratePolicy(t *testing.T) {
 		{
 			name:        "dept_head_cross_directorate_position_allowed",
 			creatorType: "dept_head",
+			targetType:  "position",
+			targetDir:   &dirB,
+		},
+		{
+			name:        "sub_dept_head_cross_directorate_position_allowed",
+			creatorType: "sub_dept_head",
 			targetType:  "position",
 			targetDir:   &dirB,
 		},

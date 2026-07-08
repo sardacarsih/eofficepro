@@ -8,6 +8,7 @@ import { CurrentUserProvider } from "@/components/layout/CurrentUserProvider";
 
 const PAGE_TITLES: { prefix: string; title: string }[] = [
   { prefix: "/dashboard", title: "Dashboard" },
+  { prefix: "/inbox", title: "Surat Masuk" },
   { prefix: "/compose", title: "Tulis Surat" },
   { prefix: "/approvals", title: "Approval" },
   { prefix: "/organization", title: "Organisasi" },
@@ -15,6 +16,7 @@ const PAGE_TITLES: { prefix: string; title: string }[] = [
   { prefix: "/letter-types", title: "Jenis Surat" },
   { prefix: "/letter-templates", title: "Template Surat" },
   { prefix: "/letters", title: "Detail Surat" },
+  { prefix: "/profile", title: "Profil Saya" },
 ];
 
 // Layout bersama semua halaman ber-autentikasi: guard token, fetch profil

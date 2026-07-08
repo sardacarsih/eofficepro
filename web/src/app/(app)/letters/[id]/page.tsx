@@ -131,6 +131,11 @@ export default function LetterDetailPage() {
                     <p className="mt-1 text-zinc-900 dark:text-zinc-100">
                       {letter.creator_name} · {letter.creator_position_title}
                     </p>
+                    {letter.on_behalf_of_title && (
+                      <p className="mt-1 text-xs font-semibold text-cyan-700 dark:text-cyan-300">
+                        a.n. {letter.on_behalf_of_title}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">

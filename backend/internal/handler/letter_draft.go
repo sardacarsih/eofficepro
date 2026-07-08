@@ -31,6 +31,8 @@ type DraftLetter struct {
 	Status               string           `json:"status"`
 	CreatorPositionID    string           `json:"creator_position_id"`
 	CreatorPositionTitle string           `json:"creator_position_title"`
+	OnBehalfOfPositionID *string          `json:"on_behalf_of_position_id"`
+	OnBehalfOfTitle      *string          `json:"on_behalf_of_title"`
 	Version              int              `json:"version"`
 	BodyHTML             string           `json:"body_html"`
 	BodyPlain            string           `json:"body_plain"`
@@ -47,14 +49,15 @@ type DraftRecipient struct {
 }
 
 type draftLetterRequest struct {
-	CompanyID         string                  `json:"company_id"`
-	LetterTypeID      string                  `json:"letter_type_id"`
-	CreatorPositionID string                  `json:"creator_position_id"`
-	Subject           string                  `json:"subject"`
-	Classification    string                  `json:"classification"`
-	Priority          string                  `json:"priority"`
-	BodyHTML          string                  `json:"body_html"`
-	Recipients        []draftRecipientRequest `json:"recipients"`
+	CompanyID            string                  `json:"company_id"`
+	LetterTypeID         string                  `json:"letter_type_id"`
+	CreatorPositionID    string                  `json:"creator_position_id"`
+	OnBehalfOfPositionID *string                 `json:"on_behalf_of_position_id"`
+	Subject              string                  `json:"subject"`
+	Classification       string                  `json:"classification"`
+	Priority             string                  `json:"priority"`
+	BodyHTML             string                  `json:"body_html"`
+	Recipients           []draftRecipientRequest `json:"recipients"`
 }
 
 type draftRecipientRequest struct {
@@ -168,12 +171,17 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
+	if err := validateDraftOnBehalf(ctx, tx, req.CreatorPositionID, req.OnBehalfOfPositionID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	var id string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO letters
 			(company_id, letter_type_id, subject, classification, priority,
-			 creator_user_id, creator_position_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 creator_user_id, creator_position_id, on_behalf_of_position_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id::text`,
 		req.CompanyID,
 		req.LetterTypeID,
@@ -182,6 +190,7 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 		req.Priority,
 		userID,
 		req.CreatorPositionID,
+		req.OnBehalfOfPositionID,
 	).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gagal membuat draft (perusahaan atau jenis surat tidak valid)"})
@@ -273,6 +282,10 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := validateDraftOnBehalf(ctx, tx, req.CreatorPositionID, req.OnBehalfOfPositionID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	var nextVersion int
 	err = tx.QueryRow(ctx, `
@@ -288,8 +301,9 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		UPDATE letters
 		SET company_id = $2, letter_type_id = $3, subject = $4,
 		    classification = $5, priority = $6, creator_position_id = $7,
+		    on_behalf_of_position_id = $8,
 		    updated_at = now()
-		WHERE id = $1 AND creator_user_id = $8`,
+		WHERE id = $1 AND creator_user_id = $9`,
 		id,
 		req.CompanyID,
 		req.LetterTypeID,
@@ -297,6 +311,7 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		req.Classification,
 		req.Priority,
 		req.CreatorPositionID,
+		req.OnBehalfOfPositionID,
 		userID,
 	)
 	if err != nil {
@@ -341,6 +356,14 @@ func normalizeDraftLetterRequest(req *draftLetterRequest) error {
 	req.CompanyID = strings.TrimSpace(req.CompanyID)
 	req.LetterTypeID = strings.TrimSpace(req.LetterTypeID)
 	req.CreatorPositionID = strings.TrimSpace(req.CreatorPositionID)
+	if req.OnBehalfOfPositionID != nil {
+		value := strings.TrimSpace(*req.OnBehalfOfPositionID)
+		if value == "" {
+			req.OnBehalfOfPositionID = nil
+		} else {
+			req.OnBehalfOfPositionID = &value
+		}
+	}
 	req.Subject = strings.TrimSpace(req.Subject)
 	req.Classification = strings.ToLower(strings.TrimSpace(req.Classification))
 	req.Priority = strings.ToLower(strings.TrimSpace(req.Priority))
@@ -409,6 +432,47 @@ func normalizeDraftRecipients(recipients []draftRecipientRequest) error {
 	}
 	if !hasTo {
 		return errors.New("minimal satu penerima tujuan wajib dipilih")
+	}
+	return nil
+}
+
+func validateDraftOnBehalf(ctx context.Context, tx pgx.Tx, creatorPositionID string, onBehalfOfPositionID *string) error {
+	if onBehalfOfPositionID == nil {
+		return nil
+	}
+
+	var creatorType string
+	var reportsTo *string
+	err := tx.QueryRow(ctx, `
+		SELECT position_type, reports_to::text
+		FROM positions
+		WHERE id = $1 AND is_active`, creatorPositionID).Scan(&creatorType, &reportsTo)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("jabatan pembuat tidak ditemukan atau tidak aktif")
+	}
+	if err != nil {
+		return errors.New("gagal memvalidasi jabatan pembuat")
+	}
+	if creatorType != "secretary" {
+		return errors.New("atas nama hanya dapat digunakan oleh jabatan secretary")
+	}
+	if reportsTo == nil || *reportsTo != *onBehalfOfPositionID {
+		return errors.New("jabatan atas nama harus atasan langsung Secretary")
+	}
+
+	var onBehalfType string
+	err = tx.QueryRow(ctx, `
+		SELECT position_type
+		FROM positions
+		WHERE id = $1 AND is_active`, *onBehalfOfPositionID).Scan(&onBehalfType)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("jabatan atas nama tidak ditemukan atau tidak aktif")
+	}
+	if err != nil {
+		return errors.New("gagal memvalidasi jabatan atas nama")
+	}
+	if onBehalfType != "director" && onBehalfType != "gm" {
+		return errors.New("jabatan atas nama harus Director atau GM")
 	}
 	return nil
 }
@@ -525,7 +589,7 @@ func validateDraftRecipientDirectoratePolicy(creator draftPositionScope, recipie
 
 func isManagerOrAbovePositionType(positionType string) bool {
 	switch positionType {
-	case "dept_head", "gm", "director", "vp_director", "president_director":
+	case "sub_dept_head", "dept_head", "gm", "director", "vp_director", "president_director":
 		return true
 	default:
 		return false
@@ -563,7 +627,7 @@ func (h *Handler) userCanUsePosition(ctx context.Context, userID string, positio
 			WHERE user_id = $1
 			  AND position_id = $2
 			  AND current_date >= valid_from
-			  AND (valid_to IS NULL OR current_date <= valid_to)
+			  AND (valid_to IS NULL OR current_date < valid_to)
 		)`, userID, positionID).Scan(&exists)
 	return exists, err
 }
@@ -583,12 +647,14 @@ func draftLetterSelect(suffix string) string {
 		       l.letter_type_id::text, lt.code, lt.name,
 		       l.letter_number, l.subject, l.classification, l.priority, l.status,
 		       l.creator_position_id::text, p.title,
+		       l.on_behalf_of_position_id::text, obp.title,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''),
 		       COALESCE(v.body_plain, ''), l.created_at, l.updated_at
 		FROM letters l
 		JOIN companies co ON co.id = l.company_id
 		JOIN letter_types lt ON lt.id = l.letter_type_id
 		JOIN positions p ON p.id = l.creator_position_id
+		LEFT JOIN positions obp ON obp.id = l.on_behalf_of_position_id
 		LEFT JOIN LATERAL (
 			SELECT version, body_html, body_plain
 			FROM letter_versions
@@ -618,6 +684,8 @@ func scanDraftLetters(c *gin.Context, rows pgx.Rows) ([]DraftLetter, bool) {
 			&letter.Status,
 			&letter.CreatorPositionID,
 			&letter.CreatorPositionTitle,
+			&letter.OnBehalfOfPositionID,
+			&letter.OnBehalfOfTitle,
 			&letter.Version,
 			&letter.BodyHTML,
 			&letter.BodyPlain,

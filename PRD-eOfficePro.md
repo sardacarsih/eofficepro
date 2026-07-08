@@ -16,7 +16,7 @@
 
 eOffice Pro adalah aplikasi surat menyurat internal (korespondensi dinas) berbasis **web dan Android** untuk seluruh entitas KSK Group. Aplikasi menggantikan alur surat fisik/manual dengan alur digital penuh: **pembuatan → persetujuan berjenjang (approval) → distribusi/disposisi → pelacakan (tracking) → pengarsipan (archiving)** — mendukung inisiatif **paperless office**.
 
-Cakupan organisasi mengikuti Struktur Organisasi KSK Group Rev. 8: President Director, Vice President Director, Inspectorate (IA & Risk Management), 10 Direktorat beserta Biro, Department, Sub-Department (Section), Division Head, hingga level Assistant — termasuk struktur **Regional I & Regional II**, **Head Office Pontianak (Graha Fajar)**, serta **Representative Office Jakarta dan Pangkalan Bun**.
+Cakupan organisasi mengikuti struktur aktif KSK Group: President Director, Vice President Director, Inspectorate (IA & Risk Management), 10 Direktorat beserta Biro, Department, Sub Department Head, Division Head, hingga level Assistant — termasuk struktur **Regional I & Regional II**, **Head Office Pontianak (Graha Fajar)**, serta **Representative Office Jakarta dan Pangkalan Bun**.
 
 ---
 
@@ -74,7 +74,7 @@ Peran dipetakan langsung dari Struktur Organisasi Rev. 8:
 |---------|----------------------|-----------------|
 | **Eksekutif** | President Director, Vice President Director | Approve/tolak cepat dari mana saja (mayoritas via Android), delegasi saat berhalangan, ringkasan surat menunggu |
 | **Direktur / GM Biro** | Direktur 10 direktorat, GM Biro | Approval berjenjang, disposisi ke department, monitor SLA unitnya |
-| **Kepala Department / Section Head** | Department & Sub-Department (Section) semua direktorat, Regional I/II | Membuat & mereview surat, menindaklanjuti disposisi |
+| **Kepala Department / Division Head** | Department & Division semua direktorat, Regional I/II | Membuat & mereview surat, menindaklanjuti disposisi |
 | **Division Head / Assistant** | Division Head, Assistant | Membuat draft, menerima disposisi, melaporkan tindak lanjut |
 | **Sekretaris** | Secretary President/VP/Director/GM | Drafting atas nama pimpinan, registrasi & penomoran, distribusi, pengelolaan arsip unit |
 | **Auditor** | Inspectorate IA & Risk Management | Akses baca lintas unit sesuai penugasan, audit trail lengkap, ekspor bukti audit |
@@ -84,7 +84,7 @@ Peran dipetakan langsung dari Struktur Organisasi Rev. 8:
 
 ## 6. User Stories
 
-### Pembuat Surat (Staff/Division Head/Section Head)
+### Pembuat Surat (Staff/Division Head/Department Head)
 1. Sebagai **staff department**, saya ingin membuat surat dari **template resmi** (memo, nota dinas, surat edaran, dst.) agar format konsisten tanpa mengetik ulang kop/format.
 2. Sebagai **pembuat surat**, saya ingin melihat **status real-time** (draft, menunggu approval di siapa, disetujui, ditolak, terdistribusi) agar tahu posisi surat tanpa bertanya.
 3. Sebagai **pembuat surat**, saya ingin **notifikasi** saat surat saya disetujui/ditolak beserta alasannya agar bisa segera menindaklanjuti.
@@ -139,7 +139,7 @@ Cabang: Ditolak → kembali ke Draft (dengan catatan) | Dibatalkan (oleh pembuat
 ```
 
 ### 7.3 Alur Approval
-- **Berjenjang mengikuti hierarki organisasi** (default): Assistant/Div. Head → Section Head → Dept. Head → GM Biro → Direktur → VP → Presdir, berhenti di level yang dipersyaratkan jenis surat.
+- **Berjenjang mengikuti hierarki organisasi** (default): Assistant/Div. Head → Dept. Head → GM Biro → Direktur → VP → Presdir, berhenti di level yang dipersyaratkan jenis surat.
 - **Matrix per jenis surat + nilai/kategori** dapat dikonfigurasi admin (mis. SK wajib sampai Presdir; memo cukup Dept. Head).
 - **Paralel** (semua harus setuju) dan **serial** (berurutan) didukung.
 - **Delegasi** dengan periode berlaku; setiap aksi delegatee tercatat "a.n." di audit trail.
@@ -161,7 +161,7 @@ Nomor terkunci saat approval final (bukan saat draft) untuk mencegah nomor hangu
 ### 8.1 Must-Have (P0) — v1 tidak bisa rilis tanpa ini
 
 **P0-1. Manajemen Organisasi & Pengguna**
-- Master struktur organisasi hierarkis sesuai Rev. 8 (Direktorat → Biro → Department → Section → Division/Assistant; atribut Regional I/II, HO, Rep. Office).
+- Master struktur organisasi hierarkis aktif (Direktorat → Biro → Department → Division/Assistant; atribut Regional I/II, HO, Rep. Office).
 - Pengguna terikat ke jabatan (bukan orang) sehingga mutasi pegawai tidak merusak alur.
 - Role-based access control (RBAC): Pembuat, Approver, Sekretaris, Auditor (read-only lintas unit), Admin.
 - **Kriteria terima:**
@@ -197,7 +197,7 @@ Nomor terkunci saat approval final (bukan saat draft) untuk mencegah nomor hangu
 - Inbox surat masuk (To/CC terpisah), tanda baca/belum, disposisi berinstruksi + tenggat ke satu/banyak unit, status tindak lanjut.
 - **Kriteria terima:**
   - [ ] Penerima To mendapat notifikasi & item inbox saat surat terbit
-  - [ ] Disposisi berantai (Direktur → Dept → Section) tetap terlacak ke surat induk
+  - [ ] Disposisi berantai (Direktur → Dept → Division) tetap terlacak ke surat induk
   - [ ] Pemberi disposisi melihat status tindak lanjut tiap penerima
 
 **P0-6. Tracking & Timeline**
@@ -359,7 +359,7 @@ Berdasarkan Struktur Organisasi KSK Group Rev. 8 (berlaku 01-01-2026):
   7. Human Resources & General Affairs — Dept: HO HRGA; HRGA Regional I & II; Training Center; Rep. Office Jakarta & Pangkalan Bun
   8. Sustainability & Environment — Dept: Compliance; Environment; Safety; Health (Reg. I & II)
   9. Tax, Purchase & Port — Dept: Tax; Purchase & Logistic; Port
-- **Jenjang**: Directorate → Biro → Department → Sub-Department (Section) → Division Head / Assistant
+- **Jenjang jabatan**: Directorate → Biro → Department Head → Sub Department Head → Division Head / Assistant
 - **Lokasi**: Head Office Pontianak (Graha Fajar, Jl. WR. Supratman No. 42), Regional I, Regional II, Rep. Office Jakarta, Rep. Office Pangkalan Bun
 
 > Catatan: aplikasi harus menyimpan struktur ini sebagai **data konfigurasi**, bukan hard-code, karena struktur direvisi hampir setiap tahun (Rev. 0 tahun 2022 → Rev. 8 tahun 2026).

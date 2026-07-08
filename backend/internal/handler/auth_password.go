@@ -56,6 +56,56 @@ func (h *Handler) LogoutAll(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "semua sesi dicabut", "revoked_sessions": revoked})
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required,min=10"`
+}
+
+// ChangePassword — pengguna login mengganti password sendiri dari menu profil.
+// Password lama wajib diverifikasi; sukses = seluruh sesi dicabut (login ulang).
+func (h *Handler) ChangePassword(c *gin.Context) {
+	var req changePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password lama wajib diisi dan password baru minimal 10 karakter"})
+		return
+	}
+	userID := c.GetString(middleware.CtxUserID)
+	ctx := c.Request.Context()
+
+	var passwordHash string
+	if err := h.DB.QueryRow(ctx,
+		`SELECT password_hash FROM users WHERE id = $1 AND status = 'active'`, userID).
+		Scan(&passwordHash); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "akun tidak aktif"})
+		return
+	}
+	if !auth.VerifyPassword(req.CurrentPassword, passwordHash) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password lama salah"})
+		return
+	}
+	if req.NewPassword == req.CurrentPassword {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password baru harus berbeda dari password lama"})
+		return
+	}
+
+	hash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memproses password"})
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE users SET password_hash = $2, failed_login_count = 0, locked_until = NULL, updated_at = now()
+		WHERE id = $1`, userID, hash); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan password"})
+		return
+	}
+
+	// Password baru = semua sesi lama dicabut.
+	h.revokeAllSessions(ctx, userID)
+	h.audit(ctx, "user", &userID, "password_changed", &userID, nil, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"message": "password berhasil diubah, silakan login ulang"})
+}
+
 type forgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }

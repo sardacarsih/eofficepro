@@ -25,6 +25,7 @@ type LetterDetail struct {
 	Status               string                 `json:"status"`
 	CreatorName          string                 `json:"creator_name"`
 	CreatorPositionTitle string                 `json:"creator_position_title"`
+	OnBehalfOfTitle      *string                `json:"on_behalf_of_title"`
 	Version              int                    `json:"version"`
 	BodyHTML             string                 `json:"body_html"`
 	BodyPlain            string                 `json:"body_plain"`
@@ -76,13 +77,17 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "surat tidak ditemukan"})
 		return
 	}
+	if err := h.markLetterRead(ctx, userID, letterID, c.ClientIP()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mencatat tanda baca surat"})
+		return
+	}
 
 	var detail LetterDetail
 	var finalPDFKey *string
 	err = h.DB.QueryRow(ctx, `
 		SELECT l.id::text, co.code, co.name, lt.code, lt.name, l.letter_number,
 		       l.subject, l.classification, l.priority, l.status,
-		       u.full_name, p.title,
+		       u.full_name, p.title, obp.title,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''), COALESCE(v.body_plain, ''),
 		       l.qr_token, l.final_pdf_key, l.created_at, l.updated_at, l.published_at
 		FROM letters l
@@ -90,6 +95,7 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		JOIN letter_types lt ON lt.id = l.letter_type_id
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
+		LEFT JOIN positions obp ON obp.id = l.on_behalf_of_position_id
 		LEFT JOIN LATERAL (
 			SELECT version, body_html, body_plain
 			FROM letter_versions
@@ -110,6 +116,7 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		&detail.Status,
 		&detail.CreatorName,
 		&detail.CreatorPositionTitle,
+		&detail.OnBehalfOfTitle,
 		&detail.Version,
 		&detail.BodyHTML,
 		&detail.BodyPlain,
@@ -179,16 +186,12 @@ func (h *Handler) userCanViewLetter(ctx context.Context, userID string, letterID
 			WHERE s.letter_id = $1
 			  AND up.user_id = $2
 			  AND current_date >= up.valid_from
-			  AND (up.valid_to IS NULL OR current_date <= up.valid_to)
+			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 		) OR EXISTS (
 			SELECT 1
 			FROM letter_recipients lr
-			LEFT JOIN user_positions up ON up.position_id = lr.position_id
 			WHERE lr.letter_id = $1
-			  AND (
-			    lr.resolved_user_id = $2
-			    OR (up.user_id = $2 AND current_date >= up.valid_from AND (up.valid_to IS NULL OR current_date <= up.valid_to))
-			  )
+			  AND `+recipientAccessSQL("$2")+`
 		)`, letterID, userID).Scan(&allowed)
 	return allowed, err
 }
