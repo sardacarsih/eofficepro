@@ -63,6 +63,8 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	authed.GET("/companies", h.ListCompanies)
 	authed.GET("/letter-types", h.ListLetterTypes)
 	authed.GET("/letter-templates", h.ListLetterTemplates)
+	authed.GET("/letters/mine", h.ListMyLetters)
+	authed.GET("/letters/view/:id", h.GetLetterDetail)
 	authed.GET("/letters/drafts", h.ListDraftLetters)
 	authed.GET("/letters/drafts/:id", h.GetDraftLetter)
 	authed.GET("/letters/drafts/:id/attachments", h.ListDraftAttachments)

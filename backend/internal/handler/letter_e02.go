@@ -59,6 +59,7 @@ type draftPreviewData struct {
 	CompanyName          string
 	LetterTypeCode       string
 	LetterTypeName       string
+	LetterNumber         string
 	Subject              string
 	Classification       string
 	Priority             string
@@ -67,6 +68,7 @@ type draftPreviewData struct {
 	Version              int
 	BodyPlain            string
 	QRToken              *string
+	PublishedAt          *time.Time
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -325,6 +327,10 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := validateApprovalRouteHasActiveHolders(ctx, tx, route); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM approval_steps WHERE letter_id = $1`, letterID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyiapkan rute approval"})
@@ -542,7 +548,15 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 }
 
 func (h *Handler) loadRecipientLabels(ctx context.Context, letterID string) (map[string][]string, error) {
-	rows, err := h.DB.Query(ctx, `
+	return loadRecipientLabels(ctx, h.DB, letterID)
+}
+
+type recipientLabelQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func loadRecipientLabels(ctx context.Context, q recipientLabelQuerier, letterID string) (map[string][]string, error) {
+	rows, err := q.Query(ctx, `
 		SELECT lr.recipient_type,
 		       CASE
 		         WHEN lr.position_id IS NOT NULL THEN p.title || ' - ' || pou.name
@@ -570,11 +584,95 @@ func (h *Handler) loadRecipientLabels(ctx context.Context, letterID string) (map
 	return recipients, rows.Err()
 }
 
+func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (draftPreviewData, error) {
+	var data draftPreviewData
+	var letterNumber *string
+	err := tx.QueryRow(ctx, `
+		SELECT l.id::text, co.code, co.name, lt.code, lt.name,
+		       l.letter_number, l.subject, l.classification, l.priority,
+		       u.full_name, p.title, COALESCE(v.version, 0), COALESCE(v.body_plain, ''),
+		       l.qr_token, l.published_at, l.created_at, l.updated_at
+		FROM letters l
+		JOIN companies co ON co.id = l.company_id
+		JOIN letter_types lt ON lt.id = l.letter_type_id
+		JOIN users u ON u.id = l.creator_user_id
+		JOIN positions p ON p.id = l.creator_position_id
+		LEFT JOIN LATERAL (
+			SELECT version, body_plain
+			FROM letter_versions
+			WHERE letter_id = l.id
+			ORDER BY version DESC
+			LIMIT 1
+		) v ON true
+		WHERE l.id = $1`, letterID).Scan(
+		&data.ID,
+		&data.CompanyCode,
+		&data.CompanyName,
+		&data.LetterTypeCode,
+		&data.LetterTypeName,
+		&letterNumber,
+		&data.Subject,
+		&data.Classification,
+		&data.Priority,
+		&data.CreatorName,
+		&data.CreatorPositionTitle,
+		&data.Version,
+		&data.BodyPlain,
+		&data.QRToken,
+		&data.PublishedAt,
+		&data.CreatedAt,
+		&data.UpdatedAt,
+	)
+	if letterNumber != nil {
+		data.LetterNumber = *letterNumber
+	}
+	return data, err
+}
+
+func (h *Handler) renderAndStoreFinalPDF(ctx context.Context, tx pgx.Tx, letterID string, letterNumber string, publishedAt time.Time) (string, error) {
+	if h.Minio == nil {
+		return "", errors.New("object storage belum tersedia untuk PDF final")
+	}
+
+	data, err := loadFinalLetterPDFData(ctx, tx, letterID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errors.New("surat tidak ditemukan untuk PDF final")
+	}
+	if err != nil {
+		return "", errors.New("gagal memuat data PDF final")
+	}
+	data.LetterNumber = letterNumber
+	data.PublishedAt = &publishedAt
+
+	recipients, err := loadRecipientLabels(ctx, tx, letterID)
+	if err != nil {
+		return "", errors.New("gagal memuat penerima PDF final")
+	}
+
+	verifyURL := ""
+	if data.QRToken != nil && *data.QRToken != "" {
+		verifyURL = h.verifyURL(*data.QRToken)
+	}
+	pdfBytes, err := renderFinalLetterPDF(data, recipients, verifyURL)
+	if err != nil {
+		return "", errors.New("gagal membuat PDF final")
+	}
+
+	objectName := fmt.Sprintf("letters/%s/final/final-%d.pdf", letterID, publishedAt.Unix())
+	if _, err := h.Minio.PutObject(ctx, h.Bucket, objectName, bytes.NewReader(pdfBytes), int64(len(pdfBytes)), minio.PutObjectOptions{
+		ContentType: "application/pdf",
+	}); err != nil {
+		return "", errors.New("gagal menyimpan PDF final ke object storage")
+	}
+	return objectName, nil
+}
+
 func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]string) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetTitle(data.Subject, true)
 	pdf.SetAuthor("eOffice Pro", true)
 	pdf.SetMargins(20, 18, 20)
+	pdf.SetAutoPageBreak(true, 18)
 	pdf.AddPage()
 
 	pdf.SetFont("Arial", "B", 14)
@@ -611,6 +709,71 @@ func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]strin
 		pdf.MultiCell(0, 5, "QR verifikasi akan diterbitkan saat draft diajukan.", "", "L", false)
 	}
 	pdf.MultiCell(0, 5, fmt.Sprintf("Preview v%d dibuat oleh eOffice Pro pada %s", data.Version, time.Now().Format(time.RFC3339)), "", "L", false)
+
+	var out bytes.Buffer
+	if err := pdf.Output(&out); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string, verifyURL string) ([]byte, error) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetTitle(data.Subject, true)
+	pdf.SetAuthor("eOffice Pro", true)
+	pdf.SetMargins(20, 18, 20)
+	pdf.SetAutoPageBreak(true, 18)
+	pdf.AddPage()
+
+	pdf.SetFont("Arial", "B", 14)
+	pdf.CellFormat(0, 8, data.CompanyName, "", 1, "C", false, 0, "")
+	pdf.SetFont("Arial", "", 9)
+	pdf.CellFormat(0, 5, fmt.Sprintf("%s - %s", data.LetterTypeCode, data.LetterTypeName), "", 1, "C", false, 0, "")
+	pdf.Ln(3)
+	pdf.Line(20, pdf.GetY(), 190, pdf.GetY())
+	pdf.Ln(6)
+
+	publishedAt := "-"
+	if data.PublishedAt != nil {
+		publishedAt = data.PublishedAt.Format("02/01/2006 15:04 MST")
+	}
+
+	pdf.SetFont("Arial", "", 10)
+	writePDFKV(pdf, "Nomor", data.LetterNumber)
+	writePDFKV(pdf, "Tanggal", publishedAt)
+	writePDFKV(pdf, "Perihal", data.Subject)
+	writePDFKV(pdf, "Klasifikasi", strings.Title(data.Classification))
+	writePDFKV(pdf, "Prioritas", strings.Title(data.Priority))
+	writePDFKV(pdf, "Pembuat", data.CreatorName+" - "+data.CreatorPositionTitle)
+	writePDFKV(pdf, "Kepada", strings.Join(recipients["to"], "; "))
+	if len(recipients["cc"]) > 0 {
+		writePDFKV(pdf, "Tembusan", strings.Join(recipients["cc"], "; "))
+	}
+	pdf.Ln(4)
+
+	pdf.SetFont("Arial", "", 11)
+	body := strings.TrimSpace(data.BodyPlain)
+	if body == "" {
+		body = "(isi surat kosong)"
+	}
+	pdf.MultiCell(0, 6, body, "", "L", false)
+	pdf.Ln(10)
+
+	pdf.SetFont("Arial", "", 10)
+	pdf.CellFormat(0, 6, data.CreatorPositionTitle+",", "", 1, "R", false, 0, "")
+	pdf.Ln(14)
+	pdf.SetFont("Arial", "B", 10)
+	pdf.CellFormat(0, 6, data.CreatorName, "", 1, "R", false, 0, "")
+
+	pdf.Ln(8)
+	pdf.SetFont("Arial", "I", 8)
+	if verifyURL != "" {
+		pdf.MultiCell(0, 5, "Verifikasi dokumen: "+verifyURL, "", "L", false)
+	}
+	if data.QRToken != nil && *data.QRToken != "" {
+		pdf.MultiCell(0, 5, "Token QR verifikasi: "+*data.QRToken, "", "L", false)
+	}
+	pdf.MultiCell(0, 5, fmt.Sprintf("PDF final v%d diterbitkan oleh eOffice Pro.", data.Version), "", "L", false)
 
 	var out bytes.Buffer
 	if err := pdf.Output(&out); err != nil {

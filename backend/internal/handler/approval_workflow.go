@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/minio/minio-go/v7"
 
 	"github.com/kskgroup/eofficepro/internal/middleware"
 )
@@ -175,6 +179,223 @@ func (h *Handler) resolveApprovalRoute(ctx context.Context, tx pgx.Tx, letterTyp
 	return approvalRoute{SLAHours: slaHours, Steps: steps}, nil
 }
 
+type numberingContext struct {
+	CompanyID    string
+	CompanyCode  string
+	LetterTypeID string
+	LetterType   string
+	OrgUnitID    string
+	OrgUnitCode  string
+	CreatedAt    time.Time
+}
+
+type numberingFormatConfig struct {
+	ID          string
+	Pattern     string
+	ResetPeriod string
+}
+
+func finalizeApprovedLetter(ctx context.Context, tx pgx.Tx, letterID string) (string, error) {
+	numbering, err := loadNumberingContext(ctx, tx, letterID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errors.New("surat tidak ditemukan untuk finalisasi")
+	}
+	if err != nil {
+		return "", errors.New("gagal membaca konteks penomoran surat")
+	}
+
+	format, err := ensureNumberingFormat(ctx, tx, numbering)
+	if err != nil {
+		return "", err
+	}
+
+	seq, err := nextNumberingSequence(ctx, tx, format.ID, numberingScopeKey(numbering, format.ResetPeriod))
+	if err != nil {
+		return "", err
+	}
+	return renderLetterNumber(format.Pattern, numbering, seq), nil
+}
+
+func loadNumberingContext(ctx context.Context, tx pgx.Tx, letterID string) (numberingContext, error) {
+	var numbering numberingContext
+	err := tx.QueryRow(ctx, `
+		SELECT l.company_id::text, co.code,
+		       l.letter_type_id::text, lt.code,
+		       ou.id::text, ou.code,
+		       l.created_at
+		FROM letters l
+		JOIN companies co ON co.id = l.company_id
+		JOIN letter_types lt ON lt.id = l.letter_type_id
+		JOIN positions p ON p.id = l.creator_position_id
+		JOIN org_units ou ON ou.id = p.org_unit_id
+		WHERE l.id = $1
+		FOR UPDATE OF l`, letterID).Scan(
+		&numbering.CompanyID,
+		&numbering.CompanyCode,
+		&numbering.LetterTypeID,
+		&numbering.LetterType,
+		&numbering.OrgUnitID,
+		&numbering.OrgUnitCode,
+		&numbering.CreatedAt,
+	)
+	return numbering, err
+}
+
+func ensureNumberingFormat(ctx context.Context, tx pgx.Tx, numbering numberingContext) (numberingFormatConfig, error) {
+	var format numberingFormatConfig
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, pattern, reset_period
+		FROM numbering_formats
+		WHERE company_id = $1
+		  AND is_active
+		  AND (letter_type_id IS NULL OR letter_type_id = $2)
+		  AND (org_unit_id IS NULL OR org_unit_id = $3)
+		ORDER BY
+		  CASE WHEN letter_type_id = $2 THEN 0 ELSE 1 END,
+		  CASE WHEN org_unit_id = $3 THEN 0 ELSE 1 END,
+		  id
+		LIMIT 1`, numbering.CompanyID, numbering.LetterTypeID, numbering.OrgUnitID).Scan(
+		&format.ID,
+		&format.Pattern,
+		&format.ResetPeriod,
+	)
+	if err == nil {
+		return format, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return numberingFormatConfig{}, errors.New("gagal membaca format penomoran")
+	}
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "numbering_format:"+numbering.CompanyID); err != nil {
+		return numberingFormatConfig{}, errors.New("gagal mengunci format penomoran")
+	}
+
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, pattern, reset_period
+		FROM numbering_formats
+		WHERE company_id = $1
+		  AND letter_type_id IS NULL
+		  AND org_unit_id IS NULL
+		  AND is_active
+		ORDER BY id
+		LIMIT 1`, numbering.CompanyID).Scan(&format.ID, &format.Pattern, &format.ResetPeriod)
+	if err == nil {
+		return format, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return numberingFormatConfig{}, errors.New("gagal membaca format penomoran default")
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO numbering_formats (company_id, pattern, reset_period)
+		VALUES ($1, '{seq:4}/{type}/{unit}/{roman_month}/{year}', 'yearly')
+		RETURNING id::text, pattern, reset_period`, numbering.CompanyID).Scan(
+		&format.ID,
+		&format.Pattern,
+		&format.ResetPeriod,
+	)
+	if err != nil {
+		return numberingFormatConfig{}, errors.New("gagal membuat format penomoran default")
+	}
+	return format, nil
+}
+
+func numberingScopeKey(numbering numberingContext, resetPeriod string) string {
+	if resetPeriod == "monthly" {
+		return strings.Join([]string{numbering.CompanyCode, numbering.OrgUnitCode, numbering.LetterType, numbering.CreatedAt.Format("2006-01")}, "|")
+	}
+	return strings.Join([]string{numbering.CompanyCode, numbering.OrgUnitCode, numbering.LetterType, numbering.CreatedAt.Format("2006")}, "|")
+}
+
+func nextNumberingSequence(ctx context.Context, tx pgx.Tx, formatID string, scopeKey string) (int, error) {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO numbering_counters (format_id, scope_key, current_value)
+		VALUES ($1, $2, 0)
+		ON CONFLICT (format_id, scope_key) DO NOTHING`, formatID, scopeKey); err != nil {
+		return 0, errors.New("gagal menyiapkan counter penomoran")
+	}
+
+	var current int
+	if err := tx.QueryRow(ctx, `
+		SELECT current_value
+		FROM numbering_counters
+		WHERE format_id = $1 AND scope_key = $2
+		FOR UPDATE`, formatID, scopeKey).Scan(&current); err != nil {
+		return 0, errors.New("gagal mengunci counter penomoran")
+	}
+
+	next := current + 1
+	if _, err := tx.Exec(ctx, `
+		UPDATE numbering_counters
+		SET current_value = $3
+		WHERE format_id = $1 AND scope_key = $2`, formatID, scopeKey, next); err != nil {
+		return 0, errors.New("gagal memperbarui counter penomoran")
+	}
+	return next, nil
+}
+
+func renderLetterNumber(pattern string, numbering numberingContext, seq int) string {
+	replacements := map[string]string{
+		"company":     numbering.CompanyCode,
+		"type":        numbering.LetterType,
+		"unit":        numbering.OrgUnitCode,
+		"year":        numbering.CreatedAt.Format("2006"),
+		"month":       numbering.CreatedAt.Format("01"),
+		"roman_month": romanMonth(int(numbering.CreatedAt.Month())),
+	}
+
+	result := pattern
+	for key, value := range replacements {
+		result = strings.ReplaceAll(result, "{"+key+"}", value)
+	}
+
+	seqPattern := regexp.MustCompile(`\{seq(?::([0-9]+))?\}`)
+	return seqPattern.ReplaceAllStringFunc(result, func(match string) string {
+		parts := seqPattern.FindStringSubmatch(match)
+		width := 0
+		if len(parts) > 1 && parts[1] != "" {
+			if parsed, err := strconv.Atoi(parts[1]); err == nil {
+				width = parsed
+			}
+		}
+		if width > 0 {
+			return fmt.Sprintf("%0*d", width, seq)
+		}
+		return strconv.Itoa(seq)
+	})
+}
+
+func romanMonth(month int) string {
+	months := []string{"", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"}
+	if month < 1 || month > 12 {
+		return ""
+	}
+	return months[month]
+}
+
+func validateApprovalRouteHasActiveHolders(ctx context.Context, tx pgx.Tx, route approvalRoute) error {
+	for _, step := range route.Steps {
+		var exists bool
+		err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM user_positions up
+				JOIN users u ON u.id = up.user_id
+				WHERE up.position_id = $1
+				  AND current_date >= up.valid_from
+				  AND (up.valid_to IS NULL OR current_date <= up.valid_to)
+				  AND u.status = 'active'
+			)`, step.PositionID).Scan(&exists)
+		if err != nil {
+			return errors.New("gagal memvalidasi pemegang jabatan approver")
+		}
+		if !exists {
+			return errors.New("jabatan approver belum memiliki pemegang aktif: " + step.Title)
+		}
+	}
+	return nil
+}
+
 func loadApprovalPosition(ctx context.Context, tx pgx.Tx, positionID string) (approvalPosition, error) {
 	var position approvalPosition
 	err := tx.QueryRow(ctx, `
@@ -208,13 +429,28 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 	rows, err := h.DB.Query(c.Request.Context(), `
 		SELECT s.id::text, s.letter_id::text, s.step_order, s.status,
 		       l.subject, l.priority, l.classification, lt.code, co.code,
-		       p.title, l.updated_at
+		       p.title, u.full_name, cp.title, COALESCE(v.body_plain, ''),
+		       COALESCE(a.attachment_count, 0), l.updated_at
 		FROM approval_steps s
 		JOIN letters l ON l.id = s.letter_id
 		JOIN letter_types lt ON lt.id = l.letter_type_id
 		JOIN companies co ON co.id = l.company_id
 		JOIN positions p ON p.id = s.approver_position_id
+		JOIN users u ON u.id = l.creator_user_id
+		JOIN positions cp ON cp.id = l.creator_position_id
 		JOIN user_positions up ON up.position_id = s.approver_position_id
+		LEFT JOIN LATERAL (
+			SELECT body_plain
+			FROM letter_versions
+			WHERE letter_id = l.id
+			ORDER BY version DESC
+			LIMIT 1
+		) v ON true
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS attachment_count
+			FROM letter_attachments
+			WHERE letter_id = l.id
+		) a ON true
 		WHERE up.user_id = $1
 		  AND current_date >= up.valid_from
 		  AND (up.valid_to IS NULL OR current_date <= up.valid_to)
@@ -228,17 +464,21 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 	defer rows.Close()
 
 	type approvalInboxItem struct {
-		StepID         string    `json:"step_id"`
-		LetterID       string    `json:"letter_id"`
-		StepOrder      int       `json:"step_order"`
-		Status         string    `json:"status"`
-		Subject        string    `json:"subject"`
-		Priority       string    `json:"priority"`
-		Classification string    `json:"classification"`
-		LetterTypeCode string    `json:"letter_type_code"`
-		CompanyCode    string    `json:"company_code"`
-		PositionTitle  string    `json:"position_title"`
-		UpdatedAt      time.Time `json:"updated_at"`
+		StepID          string    `json:"step_id"`
+		LetterID        string    `json:"letter_id"`
+		StepOrder       int       `json:"step_order"`
+		Status          string    `json:"status"`
+		Subject         string    `json:"subject"`
+		Priority        string    `json:"priority"`
+		Classification  string    `json:"classification"`
+		LetterTypeCode  string    `json:"letter_type_code"`
+		CompanyCode     string    `json:"company_code"`
+		PositionTitle   string    `json:"position_title"`
+		CreatorName     string    `json:"creator_name"`
+		CreatorPosition string    `json:"creator_position"`
+		BodyPlain       string    `json:"body_plain"`
+		AttachmentCount int       `json:"attachment_count"`
+		UpdatedAt       time.Time `json:"updated_at"`
 	}
 	items := []approvalInboxItem{}
 	for rows.Next() {
@@ -254,6 +494,10 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 			&item.LetterTypeCode,
 			&item.CompanyCode,
 			&item.PositionTitle,
+			&item.CreatorName,
+			&item.CreatorPosition,
+			&item.BodyPlain,
+			&item.AttachmentCount,
 			&item.UpdatedAt,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca inbox approval"})
@@ -336,12 +580,13 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 	if req.Action == "reject" {
 		nextStatus = "rejected"
 	}
-	if _, err := tx.Exec(ctx, `UPDATE approval_steps SET status = $2 WHERE id = $1`, stepID, nextStatus); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE approval_steps SET status = $2, decided_at = now() WHERE id = $1`, stepID, nextStatus); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui approval step"})
 		return
 	}
 
 	letterStatus := "in_approval"
+	var finalPDFKey string
 	if req.Action == "approve" {
 		nextStepID, nextOrder, err := promoteNextApprovalStep(ctx, tx, letterID, stepOrder)
 		if err != nil {
@@ -349,11 +594,28 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 			return
 		}
 		if nextStepID == "" {
-			letterStatus = "approved"
+			letterNumber, err := finalizeApprovedLetter(ctx, tx, letterID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			publishedAt := time.Now()
+			finalPDFKey, err = h.renderAndStoreFinalPDF(ctx, tx, letterID, letterNumber, publishedAt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			letterStatus = "published"
 			if _, err := tx.Exec(ctx, `
 				UPDATE letters
-				SET status = 'approved', current_step_order = NULL, updated_at = now()
-				WHERE id = $1`, letterID); err != nil {
+				SET status = 'published',
+				    letter_number = $2,
+				    final_pdf_key = $3,
+				    current_step_order = NULL,
+				    published_at = $4,
+				    updated_at = now()
+				WHERE id = $1`, letterID, letterNumber, finalPDFKey, publishedAt); err != nil {
+				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyelesaikan approval"})
 				return
 			}

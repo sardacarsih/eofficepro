@@ -80,6 +80,44 @@ func TestRenderLetterPreviewPDF(t *testing.T) {
 	}
 }
 
+func TestRenderFinalLetterPDF(t *testing.T) {
+	publishedAt := time.Date(2026, 7, 8, 10, 30, 0, 0, time.UTC)
+	qrToken := "verify-token"
+	data := draftPreviewData{
+		ID:                   "letter-1",
+		CompanyCode:          "KSK",
+		CompanyName:          "PT Kalimantan Sawit Kusuma",
+		LetterTypeCode:       "ND",
+		LetterTypeName:       "Nota Dinas",
+		LetterNumber:         "0001/ND/IS/VII/2026",
+		Subject:              "Persetujuan Anggaran",
+		Classification:       "biasa",
+		Priority:             "normal",
+		CreatorName:          "Budi",
+		CreatorPositionTitle: "Dept Head",
+		Version:              3,
+		BodyPlain:            strings.Repeat("Isi final surat. ", 20),
+		QRToken:              &qrToken,
+		PublishedAt:          &publishedAt,
+		CreatedAt:            publishedAt,
+		UpdatedAt:            publishedAt,
+	}
+
+	pdf, err := renderFinalLetterPDF(data, map[string][]string{
+		"to": {"Direktur - Information System"},
+		"cc": {"HRGA"},
+	}, "http://localhost:3000/verify/verify-token")
+	if err != nil {
+		t.Fatalf("renderFinalLetterPDF() error = %v", err)
+	}
+	if !bytes.HasPrefix(pdf, []byte("%PDF")) {
+		t.Fatalf("renderFinalLetterPDF() did not return PDF bytes")
+	}
+	if len(pdf) < 1000 {
+		t.Fatalf("renderFinalLetterPDF() length = %d, want substantial PDF", len(pdf))
+	}
+}
+
 func TestRandomHexLength(t *testing.T) {
 	got := randomHex(24)
 	if len(got) != 48 {

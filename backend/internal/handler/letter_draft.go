@@ -24,6 +24,7 @@ type DraftLetter struct {
 	LetterTypeID         string           `json:"letter_type_id"`
 	LetterTypeCode       string           `json:"letter_type_code"`
 	LetterTypeName       string           `json:"letter_type_name"`
+	LetterNumber         *string          `json:"letter_number"`
 	Subject              string           `json:"subject"`
 	Classification       string           `json:"classification"`
 	Priority             string           `json:"priority"`
@@ -70,6 +71,28 @@ func (h *Handler) ListDraftLetters(c *gin.Context) {
 		ORDER BY l.updated_at DESC`), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat draft surat"})
+		return
+	}
+	defer rows.Close()
+
+	letters, ok := scanDraftLetters(c, rows)
+	if !ok {
+		return
+	}
+	if !h.attachDraftRecipients(c, letters) {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"letters": letters})
+}
+
+func (h *Handler) ListMyLetters(c *gin.Context) {
+	userID := c.GetString(middleware.CtxUserID)
+	rows, err := h.DB.Query(c.Request.Context(), draftLetterSelect(`
+		WHERE l.creator_user_id = $1
+		ORDER BY l.updated_at DESC
+		LIMIT 50`), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat surat saya"})
 		return
 	}
 	defer rows.Close()
@@ -558,7 +581,7 @@ func draftLetterSelect(suffix string) string {
 	return `
 		SELECT l.id::text, l.company_id::text, co.code, co.name,
 		       l.letter_type_id::text, lt.code, lt.name,
-		       l.subject, l.classification, l.priority, l.status,
+		       l.letter_number, l.subject, l.classification, l.priority, l.status,
 		       l.creator_position_id::text, p.title,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''),
 		       COALESCE(v.body_plain, ''), l.created_at, l.updated_at
@@ -588,6 +611,7 @@ func scanDraftLetters(c *gin.Context, rows pgx.Rows) ([]DraftLetter, bool) {
 			&letter.LetterTypeID,
 			&letter.LetterTypeCode,
 			&letter.LetterTypeName,
+			&letter.LetterNumber,
 			&letter.Subject,
 			&letter.Classification,
 			&letter.Priority,
