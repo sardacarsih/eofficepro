@@ -293,6 +293,89 @@ export const updateDraftLetter = (id: string, payload: DraftLetterPayload) =>
     body: JSON.stringify(payload),
   });
 
+export interface LetterAttachment {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_key: string;
+  checksum_sha256: string;
+  scan_status: "pending" | "clean" | "infected" | "failed";
+  download_url?: string;
+  created_at: string;
+}
+
+export interface DraftPreviewResult {
+  storage_key: string;
+  preview_url: string;
+  expires_in: number;
+}
+
+export interface SubmitDraftResult {
+  id: string;
+  status: "in_approval";
+  qr_token: string;
+  verify_url: string;
+  approval_steps: {
+    step_order: number;
+    flow_group: number;
+    position_id: string;
+    position_type: string;
+    title: string;
+  }[];
+}
+
+export const listDraftAttachments = (id: string) =>
+  apiFetch<{ attachments: LetterAttachment[] }>(`/letters/drafts/${id}/attachments`);
+
+export async function uploadDraftAttachment(
+  id: string,
+  file: File,
+): Promise<{ id: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/letters/drafts/${id}/attachments`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
+    body: form,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Upload lampiran gagal");
+  return data as { id: string };
+}
+
+export const deleteDraftAttachment = (draftID: string, attachmentID: string) =>
+  apiFetch<{ id: string }>(`/letters/drafts/${draftID}/attachments/${attachmentID}`, {
+    method: "DELETE",
+  });
+
+export const previewDraftLetter = (id: string) =>
+  apiFetch<DraftPreviewResult>(`/letters/drafts/${id}/preview`, { method: "POST" });
+
+export const submitDraftLetter = (id: string) =>
+  apiFetch<SubmitDraftResult>(`/letters/drafts/${id}/submit`, { method: "POST" });
+
+export interface VerifiedLetter {
+  id: string;
+  company_code: string;
+  company_name: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  letter_number: string | null;
+  subject: string;
+  classification: string;
+  status: string;
+  published_at: string | null;
+  created_at: string;
+}
+
+export async function verifyLetter(token: string): Promise<VerifiedLetter> {
+  const res = await fetch(`${BASE}/verify/${encodeURIComponent(token)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Token verifikasi tidak valid");
+  return data.letter as VerifiedLetter;
+}
+
 // ---- Reset password (publik) ----
 
 export async function forgotPassword(email: string): Promise<string> {

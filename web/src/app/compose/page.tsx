@@ -6,20 +6,26 @@ import { useRouter } from "next/navigation";
 import RichTextEditor from "@/components/RichTextEditor";
 import {
   createDraftLetter,
+  deleteDraftAttachment,
   getAccessToken,
   getMe,
   getOrgTree,
   listCompanies,
+  listDraftAttachments,
   listDraftLetters,
   listLetterTemplates,
   listLetterTypes,
   listPositions,
   logout,
+  previewDraftLetter,
+  submitDraftLetter,
   updateDraftLetter,
+  uploadDraftAttachment,
   type Company,
   type DraftRecipient,
   type DraftLetter,
   type DraftLetterPayload,
+  type LetterAttachment,
   type LetterTemplate,
   type LetterType,
   type OrgUnit,
@@ -126,6 +132,12 @@ function bodySkeletonForComposer(bodySkeleton: string): string {
     .trim();
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 const MANAGER_OR_ABOVE_POSITION_TYPES = new Set([
   "dept_head",
   "gm",
@@ -197,6 +209,7 @@ export default function ComposePage() {
   const [recipientOrgUnits, setRecipientOrgUnits] = useState<OrgUnit[]>([]);
   const [drafts, setDrafts] = useState<DraftLetter[]>([]);
   const [form, setForm] = useState<ComposerForm | null>(null);
+  const [attachments, setAttachments] = useState<LetterAttachment[]>([]);
   const [recipientType, setRecipientType] = useState<RecipientType>("to");
   const [recipientTargetType, setRecipientTargetType] =
     useState<RecipientTargetType>("position");
@@ -204,12 +217,21 @@ export default function ComposePage() {
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reloadDrafts = useCallback(async () => {
     const data = await listDraftLetters();
     setDrafts(data.letters);
+  }, []);
+
+  const reloadAttachments = useCallback(async (draftID: string) => {
+    const data = await listDraftAttachments(draftID);
+    setAttachments(data.attachments);
   }, []);
 
   useEffect(() => {
@@ -323,6 +345,7 @@ export default function ComposePage() {
     setForm((current) => (current ? { ...current, ...patch } : current));
     setDirty(true);
     setSaveState("idle");
+    setSuccess(null);
   }
 
   function selectLetterType(letterTypeID: string) {
@@ -401,29 +424,37 @@ export default function ComposePage() {
 
   function openDraft(draft: DraftLetter) {
     setForm(draftToForm(draft));
+    setAttachments([]);
     setDirty(false);
     setSaveState("idle");
     setLastSavedAt(new Date(draft.updated_at).toLocaleTimeString("id-ID"));
+    setSuccess(null);
     setError(null);
+    void reloadAttachments(draft.id).catch((err) =>
+      setError(err instanceof Error ? err.message : "Gagal memuat lampiran"),
+    );
   }
 
   function newDraft() {
     setForm(emptyForm(companies, letterTypes, me));
+    setAttachments([]);
     setDirty(false);
     setSaveState("idle");
     setLastSavedAt(null);
+    setSuccess(null);
     setError(null);
   }
 
-  const saveDraft = useCallback(async (mode: "manual" | "auto") => {
-    if (!form) return;
+  const saveDraft = useCallback(async (mode: "manual" | "auto"): Promise<string | null> => {
+    if (!form) return null;
     if (recipientPolicyErrors.length > 0) {
       setSaveState("error");
       if (mode === "manual") setError(recipientPolicyErrors[0].message);
-      return;
+      return null;
     }
     setSaveState("saving");
     setError(null);
+    setSuccess(null);
     try {
       const payload = compactPayload(form);
       const result = form.id
@@ -439,10 +470,12 @@ export default function ComposePage() {
       setSaveState("saved");
       setLastSavedAt(new Date().toLocaleTimeString("id-ID"));
       await reloadDrafts();
+      return result.id;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Gagal menyimpan draft";
       setSaveState("error");
       if (mode === "manual") setError(message);
+      return null;
     }
   }, [form, recipientPolicyErrors, reloadDrafts]);
 
@@ -453,6 +486,82 @@ export default function ComposePage() {
     }, 30000);
     return () => window.clearTimeout(timer);
   }, [dirty, form, recipientPolicyErrors.length, saveDraft]);
+
+  async function ensureDraftSaved(): Promise<string | null> {
+    if (!form) return null;
+    if (form.id && !dirty) return form.id;
+    return saveDraft("manual");
+  }
+
+  async function handleAttachmentSelected(file: File | null) {
+    if (!file) return;
+    setUploadingAttachment(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const draftID = await ensureDraftSaved();
+      if (!draftID) return;
+      await uploadDraftAttachment(draftID, file);
+      await reloadAttachments(draftID);
+      setSuccess("Lampiran berhasil diunggah.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal mengunggah lampiran");
+    } finally {
+      setUploadingAttachment(false);
+    }
+  }
+
+  async function handleDeleteAttachment(attachmentID: string) {
+    if (!form?.id) return;
+    setError(null);
+    setSuccess(null);
+    try {
+      await deleteDraftAttachment(form.id, attachmentID);
+      await reloadAttachments(form.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menghapus lampiran");
+    }
+  }
+
+  async function handlePreview() {
+    setPreviewing(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const draftID = await ensureDraftSaved();
+      if (!draftID) return;
+      const result = await previewDraftLetter(draftID);
+      window.open(result.preview_url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal membuat preview PDF");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function handleSubmit() {
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const draftID = await ensureDraftSaved();
+      if (!draftID) return;
+      const result = await submitDraftLetter(draftID);
+      await reloadDrafts();
+      setAttachments([]);
+      setForm(emptyForm(companies, letterTypes, me));
+      setDirty(false);
+      setSaveState("idle");
+      setLastSavedAt(null);
+      setSuccess(
+        `Surat diajukan ke approval (${result.approval_steps.length} step). URL verifikasi: ${result.verify_url}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal mengajukan surat");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   async function handleLogout() {
     await logout();
@@ -588,14 +697,33 @@ export default function ComposePage() {
               <button
                 onClick={() => void saveDraft("manual")}
                 disabled={!canSaveDraft || saveState === "saving"}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
               >
                 Simpan Draft
+              </button>
+              <button
+                onClick={() => void handlePreview()}
+                disabled={!canSaveDraft || saveState === "saving" || previewing}
+                className="rounded-lg border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500 dark:text-emerald-300 dark:hover:bg-emerald-950"
+              >
+                {previewing ? "Membuat PDF..." : "Preview PDF"}
+              </button>
+              <button
+                onClick={() => void handleSubmit()}
+                disabled={!canSaveDraft || saveState === "saving" || submitting}
+                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submitting ? "Mengajukan..." : "Ajukan"}
               </button>
             </div>
           </div>
 
           <div className="p-5">
+            {success && (
+              <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                {success}
+              </p>
+            )}
             {activeError && (
               <p
                 role="alert"
@@ -804,6 +932,73 @@ export default function ComposePage() {
                     className="h-11 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                   />
                 </label>
+
+                <div className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Lampiran
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-xs font-normal text-zinc-500">
+                        Maksimal 25 MB per file. PDF, Word, Excel, CSV, PNG, dan JPG.
+                      </div>
+                      <label className="inline-flex cursor-pointer items-center rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800">
+                        {uploadingAttachment ? "Mengunggah..." : "Tambah Lampiran"}
+                        <input
+                          type="file"
+                          className="hidden"
+                          disabled={uploadingAttachment || !canSaveDraft}
+                          accept=".pdf,.docx,.xlsx,.xls,.csv,.png,.jpg,.jpeg"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] ?? null;
+                            e.currentTarget.value = "";
+                            void handleAttachmentSelected(file);
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="mt-3 grid gap-2">
+                      {attachments.length === 0 && (
+                        <p className="rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-xs font-normal text-zinc-500 dark:border-zinc-700">
+                          Belum ada lampiran.
+                        </p>
+                      )}
+                      {attachments.map((attachment) => (
+                        <div
+                          key={attachment.id}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                              {attachment.file_name}
+                            </p>
+                            <p className="text-xs font-normal text-zinc-500">
+                              {formatBytes(attachment.size_bytes)} · scan {attachment.scan_status}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            {attachment.download_url && (
+                              <a
+                                href={attachment.download_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="rounded-lg border border-zinc-300 px-3 py-1.5 font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                              >
+                                Buka
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteAttachment(attachment.id)}
+                              className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+                            >
+                              Hapus
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
 
                 <div className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
                   Isi Surat

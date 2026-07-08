@@ -29,7 +29,7 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	h := handler.New(st.DB, st.Redis, cfg)
+	h := handler.New(st.DB, st.Redis, st.Minio, st.Bucket, cfg)
 
 	r.GET("/healthz", func(c *gin.Context) {
 		deps := st.Health(c.Request.Context())
@@ -51,6 +51,7 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	api.POST("/auth/logout", h.Logout)
 	api.POST("/auth/forgot-password", h.ForgotPassword)
 	api.POST("/auth/reset-password", h.ResetPassword)
+	api.GET("/verify/:token", h.VerifyLetter)
 
 	// Terproteksi
 	authed := api.Group("", middleware.RequireAuth(h.Tokens))
@@ -64,6 +65,9 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	authed.GET("/letter-templates", h.ListLetterTemplates)
 	authed.GET("/letters/drafts", h.ListDraftLetters)
 	authed.GET("/letters/drafts/:id", h.GetDraftLetter)
+	authed.GET("/letters/drafts/:id/attachments", h.ListDraftAttachments)
+	authed.GET("/approvals/inbox", h.ListApprovalInbox)
+	authed.POST("/approvals/steps/:id/actions", h.ActApprovalStep)
 
 	// Khusus admin
 	admin := authed.Group("", middleware.RequireRole("admin"))
@@ -89,6 +93,10 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	creator := authed.Group("", middleware.RequireRole("admin", "creator", "secretary"))
 	creator.POST("/letters/drafts", h.CreateDraftLetter)
 	creator.PUT("/letters/drafts/:id", h.UpdateDraftLetter)
+	creator.POST("/letters/drafts/:id/attachments", h.UploadDraftAttachment)
+	creator.DELETE("/letters/drafts/:id/attachments/:attachment_id", h.DeleteDraftAttachment)
+	creator.POST("/letters/drafts/:id/preview", h.PreviewDraftLetter)
+	creator.POST("/letters/drafts/:id/submit", h.SubmitDraftLetter)
 
 	return r
 }
