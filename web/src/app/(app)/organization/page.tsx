@@ -1,15 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import {
-  getMe,
-  getOrgTree,
-  logout,
-  getAccessToken,
-  type OrgUnit,
-  type User,
-} from "@/lib/api";
+import { getOrgTree, type OrgUnit } from "@/lib/api";
 
 const LEVEL_LABEL: Record<string, string> = {
   directorate: "Direktorat",
@@ -64,21 +56,14 @@ function UnitNode({ unit, depth }: { unit: OrgUnit; depth: number }) {
 }
 
 export default function OrganizationPage() {
-  const router = useRouter();
-  const [me, setMe] = useState<User | null>(null);
   const [tree, setTree] = useState<OrgUnit[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/login");
-      return;
-    }
-    Promise.all([getMe(), getOrgTree()])
-      .then(([user, org]) => {
-        setMe(user);
+    getOrgTree()
+      .then((org) => {
         setTree(org.tree);
         setTotal(org.total);
       })
@@ -86,80 +71,10 @@ export default function OrganizationPage() {
         setError(err instanceof Error ? err.message : "Gagal memuat data"),
       )
       .finally(() => setLoading(false));
-  }, [router]);
-
-  async function handleLogout() {
-    await logout();
-    router.replace("/login");
-  }
+  }, []);
 
   return (
-    <div className="flex min-h-screen flex-1 flex-col bg-zinc-50 dark:bg-zinc-950">
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-700 text-sm font-bold text-white">
-              e
-            </div>
-            <span className="font-semibold text-zinc-900 dark:text-zinc-50">
-              eOffice Pro
-            </span>
-          </div>
-          <nav className="flex flex-wrap gap-4 text-sm">
-            {me?.roles.some((role) => ["admin", "creator", "secretary"].includes(role)) && (
-              <a
-                href="/compose"
-                className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-              >
-                Tulis Surat
-              </a>
-            )}
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Organisasi
-            </span>
-            {me?.roles.includes("admin") && (
-              <>
-                <a
-                  href="/users"
-                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  Pengguna
-                </a>
-                <a
-                  href="/letter-types"
-                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  Jenis Surat
-                </a>
-                <a
-                  href="/letter-templates"
-                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  Template
-                </a>
-              </>
-            )}
-          </nav>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          {me && (
-            <span className="text-zinc-600 dark:text-zinc-400">
-              {me.full_name}
-              <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                {me.roles.join(", ")}
-              </span>
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Keluar
-          </button>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
+    <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
         <div className="mb-6">
           <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
             Struktur Organisasi
@@ -187,7 +102,6 @@ export default function OrganizationPage() {
             <UnitNode key={unit.id} unit={unit} depth={0} />
           ))}
         </ul>
-      </main>
-    </div>
+    </main>
   );
 }

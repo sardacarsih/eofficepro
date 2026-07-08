@@ -1,23 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
+  assignPosition,
   createUser,
   deactivateUser,
   downloadImportTemplate,
-  getAccessToken,
-  getMe,
   importUsers,
+  listPositions,
   listUsers,
-  logout,
   updateUser,
   type ImportResult,
-  type User,
+  type Position,
   type UserPayload,
   type UserRow,
 } from "@/lib/api";
+import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin" },
@@ -46,6 +44,8 @@ interface UserFormState {
   status: UserPayload["status"];
   roles: string[];
   password: string;
+  position_id: string;
+  assignment_type: "definitive" | "plt" | "plh";
 }
 
 function emptyForm(): UserFormState {
@@ -56,10 +56,14 @@ function emptyForm(): UserFormState {
     status: "active",
     roles: ["creator"],
     password: "",
+    position_id: "",
+    assignment_type: "definitive",
   };
 }
 
-function userToForm(user: UserRow): UserFormState {
+function userToForm(user: UserRow, positions: Position[]): UserFormState {
+  const currentPosition = positions.find((position) => position.holder_user_id === user.id);
+
   return {
     nik: user.nik,
     email: user.email,
@@ -67,6 +71,8 @@ function userToForm(user: UserRow): UserFormState {
     status: user.status as UserPayload["status"],
     roles: user.roles.length > 0 ? user.roles : ["creator"],
     password: "",
+    position_id: currentPosition?.id ?? "",
+    assignment_type: "definitive",
   };
 }
 
@@ -81,11 +87,15 @@ function compactPayload(form: UserFormState): UserPayload {
   };
 }
 
+function positionLabel(position: Position): string {
+  return `${position.title} · ${position.org_unit_name}`;
+}
+
 export default function UsersPage() {
-  const router = useRouter();
+  const me = useCurrentUser();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [positions, setPositions] = useState<Position[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -97,30 +107,37 @@ export default function UsersPage() {
   const modalOpen = editing !== null || form !== null;
 
   async function reload() {
-    const data = await listUsers();
-    setUsers(data.users);
+    const [userData, positionData] = await Promise.all([listUsers(), listPositions()]);
+    setUsers(userData.users);
+    setPositions(positionData.positions);
   }
 
   useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/login");
-      return;
-    }
-    Promise.all([getMe(), listUsers()])
-      .then(([user, data]) => {
-        setMe(user);
-        setUsers(data.users);
+    Promise.all([listUsers(), listPositions()])
+      .then(([userData, positionData]) => {
+        setUsers(userData.users);
+        setPositions(positionData.positions);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat pengguna"),
       )
       .finally(() => setLoading(false));
-  }, [router]);
+  }, []);
 
   const activeCount = useMemo(
     () => users.filter((user) => user.status === "active").length,
     [users],
   );
+  const positionsByUserID = useMemo(() => {
+    const byUserID = new Map<string, Position[]>();
+    positions.forEach((position) => {
+      if (!position.holder_user_id) return;
+      const userPositions = byUserID.get(position.holder_user_id) ?? [];
+      userPositions.push(position);
+      byUserID.set(position.holder_user_id, userPositions);
+    });
+    return byUserID;
+  }, [positions]);
 
   function openCreate() {
     setEditing(null);
@@ -130,7 +147,7 @@ export default function UsersPage() {
 
   function openEdit(user: UserRow) {
     setEditing(user);
-    setForm(userToForm(user));
+    setForm(userToForm(user, positions));
     setModalError(null);
   }
 
@@ -184,10 +201,21 @@ export default function UsersPage() {
         throw new Error("Password awal minimal 10 karakter");
       }
       const payload = compactPayload(form);
+      const previousPositionID = editing
+        ? positionsByUserID.get(editing.id)?.[0]?.id ?? ""
+        : "";
+      let savedUserID = editing?.id ?? "";
       if (editing) {
         await updateUser(editing.id, payload);
       } else {
-        await createUser(payload);
+        const result = await createUser(payload);
+        savedUserID = result.id;
+      }
+      if (form.position_id && form.position_id !== previousPositionID) {
+        await assignPosition(form.position_id, {
+          user_id: savedUserID,
+          assignment_type: form.assignment_type,
+        });
       }
       await reload();
       setEditing(null);
@@ -232,68 +260,8 @@ export default function UsersPage() {
     }
   }
 
-  async function handleLogout() {
-    await logout();
-    router.replace("/login");
-  }
-
   return (
-    <div className="flex min-h-screen flex-1 flex-col bg-[#f5f7fa] text-[#172033] dark:bg-zinc-950 dark:text-zinc-50">
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-700 text-sm font-bold text-white">
-              e
-            </div>
-            <span className="font-semibold text-zinc-900 dark:text-zinc-50">
-              eOffice Pro
-            </span>
-          </div>
-          <nav className="flex flex-wrap gap-4 text-sm">
-            <Link
-              href="/compose"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Tulis Surat
-            </Link>
-            <Link
-              href="/organization"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Organisasi
-            </Link>
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Pengguna
-            </span>
-            <Link
-              href="/letter-types"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Jenis Surat
-            </Link>
-            <Link
-              href="/letter-templates"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Template
-            </Link>
-          </nav>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          {me && (
-            <span className="hidden text-zinc-600 dark:text-zinc-400 sm:inline">
-              {me.full_name}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Keluar
-          </button>
-        </div>
-      </header>
-
+    <>
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -364,13 +332,14 @@ export default function UsersPage() {
 
         <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
+            <table className="w-full min-w-[1040px] text-left text-sm">
               <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/80">
                 <tr>
                   <th className="px-4 py-3">NIK</th>
                   <th className="px-4 py-3">Nama</th>
                   <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3">Role</th>
+                  <th className="px-4 py-3">Jabatan Aktif</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Aksi</th>
                 </tr>
@@ -378,14 +347,14 @@ export default function UsersPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
+                    <td colSpan={7} className="px-4 py-8 text-center text-zinc-500">
                       Memuat pengguna...
                     </td>
                   </tr>
                 )}
                 {!loading && users.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
+                    <td colSpan={7} className="px-4 py-8 text-center text-zinc-500">
                       Belum ada pengguna.
                     </td>
                   </tr>
@@ -394,6 +363,7 @@ export default function UsersPage() {
                   users.map((user) => {
                     const status = user.status as UserPayload["status"];
                     const actionBusy = actionUserID === user.id;
+                    const userPositions = positionsByUserID.get(user.id) ?? [];
 
                     return (
                       <tr
@@ -429,6 +399,21 @@ export default function UsersPage() {
                               <span className="text-zinc-400">-</span>
                             )}
                           </div>
+                        </td>
+                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                          {userPositions.length > 0 ? (
+                            <div className="grid gap-1">
+                              {userPositions.map((position) => (
+                                <span key={position.id} className="text-xs">
+                                  {positionLabel(position)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-amber-700 dark:text-amber-300">
+                              Belum ditempatkan
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <span
@@ -625,6 +610,61 @@ export default function UsersPage() {
                 </div>
               </fieldset>
 
+              <fieldset className="grid gap-4 sm:col-span-2 sm:grid-cols-[1fr_180px]">
+                <legend className="sr-only">Penempatan Jabatan</legend>
+                <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Penempatan Jabatan
+                  <select
+                    value={form.position_id}
+                    onChange={(e) =>
+                      setForm((current) =>
+                        current
+                          ? {
+                              ...current,
+                              position_id: e.target.value,
+                            }
+                          : current,
+                      )
+                    }
+                    className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  >
+                    <option value="">Belum ditempatkan</option>
+                    {positions.map((position) => (
+                      <option key={position.id} value={position.id}>
+                        {positionLabel(position)}
+                        {position.holder_name ? ` - saat ini: ${position.holder_name}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Tipe
+                  <select
+                    value={form.assignment_type}
+                    onChange={(e) =>
+                      setForm((current) =>
+                        current
+                          ? {
+                              ...current,
+                              assignment_type: e.target
+                                .value as UserFormState["assignment_type"],
+                            }
+                          : current,
+                      )
+                    }
+                    disabled={!form.position_id}
+                    className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  >
+                    <option value="definitive">Definitif</option>
+                    <option value="plt">Plt</option>
+                    <option value="plh">Plh</option>
+                  </select>
+                </label>
+                <p className="text-xs font-normal text-zinc-500 sm:col-span-2">
+                  User dengan role pembuat surat harus memiliki jabatan aktif agar dapat memakai halaman Tulis Surat.
+                </p>
+              </fieldset>
+
               {modalError && (
                 <p
                   role="alert"
@@ -655,6 +695,6 @@ export default function UsersPage() {
           </form>
         </div>
       )}
-    </div>
+    </>
   );
 }

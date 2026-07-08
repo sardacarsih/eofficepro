@@ -1,25 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   activateLetterTemplate,
   createLetterTemplate,
   deactivateLetterTemplate,
-  getAccessToken,
-  getMe,
   listCompanies,
   listLetterTemplates,
   listLetterTypes,
-  logout,
   updateLetterTemplate,
   type Company,
   type LetterTemplate,
   type LetterTemplatePayload,
   type LetterType,
-  type User,
 } from "@/lib/api";
+import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 
 const DEFAULT_LAYOUT = {
   page: { size: "A4", margin_mm: { top: 24, right: 22, bottom: 22, left: 22 } },
@@ -91,7 +87,7 @@ function compactPayload(form: TemplateFormState): LetterTemplatePayload {
 
 export default function LetterTemplatesPage() {
   const router = useRouter();
-  const [me, setMe] = useState<User | null>(null);
+  const me = useCurrentUser();
   const [templates, setTemplates] = useState<LetterTemplate[]>([]);
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -109,24 +105,20 @@ export default function LetterTemplatesPage() {
     setTemplates(data.letter_templates);
   }
 
+  // Halaman khusus admin — alihkan role lain setelah profil termuat.
   useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/login");
-      return;
+    if (me && !me.roles.includes("admin")) {
+      router.replace("/organization");
     }
+  }, [me, router]);
 
+  useEffect(() => {
     Promise.all([
-      getMe(),
       listLetterTemplates(true),
       listLetterTypes(false),
       listCompanies(),
     ])
-      .then(([user, templateData, typeData, companyData]) => {
-        if (!user.roles.includes("admin")) {
-          router.replace("/organization");
-          return;
-        }
-        setMe(user);
+      .then(([templateData, typeData, companyData]) => {
         setTemplates(templateData.letter_templates);
         setLetterTypes(typeData.letter_types);
         setCompanies(companyData.companies);
@@ -135,7 +127,7 @@ export default function LetterTemplatesPage() {
         setError(err instanceof Error ? err.message : "Gagal memuat template surat"),
       )
       .finally(() => setLoading(false));
-  }, [router]);
+  }, []);
 
   const activeCount = useMemo(
     () => templates.filter((template) => template.is_active).length,
@@ -212,68 +204,8 @@ export default function LetterTemplatesPage() {
     }
   }
 
-  async function handleLogout() {
-    await logout();
-    router.replace("/login");
-  }
-
   return (
-    <div className="flex min-h-screen flex-1 flex-col bg-[#f5f7fa] text-[#172033] dark:bg-zinc-950 dark:text-zinc-50">
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-700 text-sm font-bold text-white">
-              e
-            </div>
-            <span className="font-semibold text-zinc-900 dark:text-zinc-50">
-              eOffice Pro
-            </span>
-          </div>
-          <nav className="flex flex-wrap gap-4 text-sm">
-            <Link
-              href="/compose"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Tulis Surat
-            </Link>
-            <Link
-              href="/organization"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Organisasi
-            </Link>
-            <Link
-              href="/users"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Pengguna
-            </Link>
-            <Link
-              href="/letter-types"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Jenis Surat
-            </Link>
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Template
-            </span>
-          </nav>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          {me && (
-            <span className="hidden text-zinc-600 dark:text-zinc-400 sm:inline">
-              {me.full_name}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Keluar
-          </button>
-        </div>
-      </header>
-
+    <>
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -566,6 +498,6 @@ export default function LetterTemplatesPage() {
           </form>
         </div>
       )}
-    </div>
+    </>
   );
 }

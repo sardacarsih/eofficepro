@@ -2,21 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import RichTextEditor from "@/components/RichTextEditor";
 import {
   createDraftLetter,
   deleteDraftAttachment,
-  getAccessToken,
-  getMe,
   getOrgTree,
   listCompanies,
   listDraftAttachments,
   listDraftLetters,
   listLetterTemplates,
   listLetterTypes,
+  listMyLetters,
   listPositions,
-  logout,
   previewDraftLetter,
   submitDraftLetter,
   updateDraftLetter,
@@ -32,6 +29,7 @@ import {
   type Position,
   type User,
 } from "@/lib/api";
+import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -138,6 +136,28 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const LETTER_STATUS_LABEL: Record<DraftLetter["status"], string> = {
+  draft: "Draft",
+  submitted: "Diajukan",
+  in_approval: "Menunggu approval",
+  revision: "Revisi",
+  approved: "Disetujui",
+  published: "Terbit",
+  cancelled: "Dibatalkan",
+  archived: "Arsip",
+};
+
+const LETTER_STATUS_STYLE: Record<DraftLetter["status"], string> = {
+  draft: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  submitted: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  in_approval: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  revision: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300",
+  approved: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  published: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  cancelled: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
+  archived: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+};
+
 const MANAGER_OR_ABOVE_POSITION_TYPES = new Set([
   "dept_head",
   "gm",
@@ -200,14 +220,14 @@ function recipientPolicyMessage(
 }
 
 export default function ComposePage() {
-  const router = useRouter();
-  const [me, setMe] = useState<User | null>(null);
+  const me = useCurrentUser();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
   const [templates, setTemplates] = useState<LetterTemplate[]>([]);
   const [recipientPositions, setRecipientPositions] = useState<Position[]>([]);
   const [recipientOrgUnits, setRecipientOrgUnits] = useState<OrgUnit[]>([]);
   const [drafts, setDrafts] = useState<DraftLetter[]>([]);
+  const [myLetters, setMyLetters] = useState<DraftLetter[]>([]);
   const [form, setForm] = useState<ComposerForm | null>(null);
   const [attachments, setAttachments] = useState<LetterAttachment[]>([]);
   const [recipientType, setRecipientType] = useState<RecipientType>("to");
@@ -229,42 +249,55 @@ export default function ComposePage() {
     setDrafts(data.letters);
   }, []);
 
+  const reloadMyLetters = useCallback(async () => {
+    const data = await listMyLetters();
+    setMyLetters(data.letters);
+  }, []);
+
   const reloadAttachments = useCallback(async (draftID: string) => {
     const data = await listDraftAttachments(draftID);
     setAttachments(data.attachments);
   }, []);
 
+  // Tunggu profil dari layout (app) agar posisi pembuat surat langsung terisi.
   useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/login");
-      return;
-    }
+    if (!me) return;
 
     Promise.all([
-      getMe(),
       listCompanies(),
       listPositions(),
       getOrgTree(),
       listLetterTypes(false),
       listLetterTemplates(false),
       listDraftLetters(),
+      listMyLetters(),
     ])
-      .then(([user, companyData, positionData, orgData, typeData, templateData, draftData]) => {
-        setMe(user);
+      .then(
+        ([
+          companyData,
+          positionData,
+          orgData,
+          typeData,
+          templateData,
+          draftData,
+          myLetterData,
+        ]) => {
         setCompanies(companyData.companies);
         setRecipientPositions(positionData.positions);
         setRecipientOrgUnits(flattenOrgUnits(orgData.tree));
         setLetterTypes(typeData.letter_types);
         setTemplates(templateData.letter_templates);
         setDrafts(draftData.letters);
-        setForm(emptyForm(companyData.companies, typeData.letter_types, user));
+        setMyLetters(myLetterData.letters);
+        setForm(emptyForm(companyData.companies, typeData.letter_types, me));
         setRecipientTargetID(positionData.positions[0]?.id ?? "");
-      })
+        },
+      )
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat composer"),
       )
       .finally(() => setLoading(false));
-  }, [router]);
+  }, [me]);
 
   const matchingTemplates = useMemo(() => {
     if (!form) return [];
@@ -338,8 +371,12 @@ export default function ComposePage() {
   const canSaveDraft = Boolean(
     form && validForSave(form) && recipientPolicyErrors.length === 0,
   );
+  const canUploadAttachment = canSaveDraft && !uploadingAttachment;
 
   const activeError = error ?? recipientPolicyErrors[0]?.message ?? null;
+  const submittedLetters = myLetters
+    .filter((letter) => letter.status !== "draft" && letter.status !== "revision")
+    .slice(0, 8);
 
   function updateForm(patch: Partial<ComposerForm>) {
     setForm((current) => (current ? { ...current, ...patch } : current));
@@ -436,12 +473,22 @@ export default function ComposePage() {
   }
 
   function newDraft() {
+    if (!canCompose || creatorPositions.length === 0) {
+      setSuccess(null);
+      setError(
+        !canCompose
+          ? "Akun ini belum memiliki role pembuat surat."
+          : "Akun ini belum ditempatkan ke jabatan aktif.",
+      );
+      return;
+    }
+
     setForm(emptyForm(companies, letterTypes, me));
     setAttachments([]);
     setDirty(false);
     setSaveState("idle");
     setLastSavedAt(null);
-    setSuccess(null);
+    setSuccess("Draft baru siap diisi. Draft akan dibuat saat data wajib lengkap dan disimpan.");
     setError(null);
   }
 
@@ -469,7 +516,7 @@ export default function ComposePage() {
       setDirty(false);
       setSaveState("saved");
       setLastSavedAt(new Date().toLocaleTimeString("id-ID"));
-      await reloadDrafts();
+      await Promise.all([reloadDrafts(), reloadMyLetters()]);
       return result.id;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Gagal menyimpan draft";
@@ -477,7 +524,7 @@ export default function ComposePage() {
       if (mode === "manual") setError(message);
       return null;
     }
-  }, [form, recipientPolicyErrors, reloadDrafts]);
+  }, [form, recipientPolicyErrors, reloadDrafts, reloadMyLetters]);
 
   useEffect(() => {
     if (!dirty || !form || !validForSave(form) || recipientPolicyErrors.length > 0) return;
@@ -547,7 +594,7 @@ export default function ComposePage() {
       const draftID = await ensureDraftSaved();
       if (!draftID) return;
       const result = await submitDraftLetter(draftID);
-      await reloadDrafts();
+      await Promise.all([reloadDrafts(), reloadMyLetters()]);
       setAttachments([]);
       setForm(emptyForm(companies, letterTypes, me));
       setDirty(false);
@@ -563,77 +610,13 @@ export default function ComposePage() {
     }
   }
 
-  async function handleLogout() {
-    await logout();
-    router.replace("/login");
-  }
-
   const canCompose =
     me?.roles.some((role) => ["admin", "creator", "secretary"].includes(role)) ?? false;
   const creatorPositions = me?.positions ?? [];
+  const canStartNewDraft = !loading && canCompose && creatorPositions.length > 0;
 
   return (
-    <div className="flex min-h-screen flex-1 flex-col bg-[#f5f7fa] text-[#172033] dark:bg-zinc-950 dark:text-zinc-50">
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-700 text-sm font-bold text-white">
-              e
-            </div>
-            <span className="font-semibold text-zinc-900 dark:text-zinc-50">
-              eOffice Pro
-            </span>
-          </div>
-          <nav className="flex flex-wrap gap-4 text-sm">
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Tulis Surat
-            </span>
-            <Link
-              href="/organization"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Organisasi
-            </Link>
-            {me?.roles.includes("admin") && (
-              <>
-                <Link
-                  href="/users"
-                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  Pengguna
-                </Link>
-                <Link
-                  href="/letter-types"
-                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  Jenis Surat
-                </Link>
-                <Link
-                  href="/letter-templates"
-                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  Template
-                </Link>
-              </>
-            )}
-          </nav>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          {me && (
-            <span className="hidden text-zinc-600 dark:text-zinc-400 sm:inline">
-              {me.full_name}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Keluar
-          </button>
-        </div>
-      </header>
-
-      <main className="mx-auto grid w-full max-w-7xl flex-1 gap-6 px-6 py-8 lg:grid-cols-[320px_1fr]">
+    <main className="mx-auto grid w-full max-w-7xl flex-1 gap-6 px-6 py-8 lg:grid-cols-[320px_1fr]">
         <aside className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
             <div>
@@ -644,7 +627,13 @@ export default function ComposePage() {
             </div>
             <button
               onClick={newDraft}
-              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
+              disabled={!canStartNewDraft}
+              title={
+                canStartNewDraft
+                  ? "Mulai draft baru"
+                  : "Akun harus memiliki role pembuat surat dan jabatan aktif"
+              }
+              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500"
             >
               Baru
             </button>
@@ -674,6 +663,57 @@ export default function ComposePage() {
               </button>
             ))}
           </div>
+          <div className="border-t border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                  Pengajuan Saya
+                </h2>
+                <p className="text-xs text-zinc-500">
+                  {submittedLetters.length} surat terakhir
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-2">
+              {loading && <p className="text-sm text-zinc-500">Memuat...</p>}
+              {!loading && submittedLetters.length === 0 && (
+                <p className="rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-xs text-zinc-500 dark:border-zinc-700">
+                  Belum ada surat yang diajukan.
+                </p>
+              )}
+              {submittedLetters.map((letter) => (
+                <Link
+                  key={letter.id}
+                  href={`/letters/${letter.id}`}
+                  className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 transition hover:bg-white dark:border-zinc-800 dark:bg-zinc-950/40 dark:hover:bg-zinc-900"
+                >
+                  <div className="line-clamp-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    {letter.subject}
+                  </div>
+                  {letter.letter_number && (
+                    <div className="mt-1 font-mono text-xs text-emerald-700 dark:text-emerald-300">
+                      {letter.letter_number}
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
+                    <span>
+                      {letter.letter_type_code} v{letter.version}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        LETTER_STATUS_STYLE[letter.status]
+                      }`}
+                    >
+                      {LETTER_STATUS_LABEL[letter.status]}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">
+                    {new Date(letter.updated_at).toLocaleDateString("id-ID")}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
         </aside>
 
         <section className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -683,7 +723,7 @@ export default function ComposePage() {
                 Tulis Surat
               </h1>
               <p className="text-sm text-zinc-500">
-                {form?.id ? `Draft v${form.version}` : "Draft baru"} · autosave 30 detik
+                {form?.id ? `Draft v${form.version}` : "Draft baru belum tersimpan"} · autosave 30 detik
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -937,15 +977,29 @@ export default function ComposePage() {
                   Lampiran
                   <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-xs font-normal text-zinc-500">
-                        Maksimal 25 MB per file. PDF, Word, Excel, CSV, PNG, dan JPG.
+                      <div className="grid gap-1 text-xs font-normal text-zinc-500">
+                        <span>
+                          Maksimal 25 MB per file. PDF, Word, Excel, CSV, PNG, dan JPG.
+                        </span>
+                        {!canSaveDraft && (
+                          <span className="font-semibold text-amber-700 dark:text-amber-300">
+                            Isi perusahaan, jenis, jabatan, perihal, penerima, dan isi surat sebelum upload lampiran.
+                          </span>
+                        )}
                       </div>
-                      <label className="inline-flex cursor-pointer items-center rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800">
+                      <label
+                        aria-disabled={!canUploadAttachment}
+                        className={`inline-flex items-center rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                          canUploadAttachment
+                            ? "cursor-pointer bg-emerald-700 text-white hover:bg-emerald-800"
+                            : "cursor-not-allowed border border-zinc-300 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500"
+                        }`}
+                      >
                         {uploadingAttachment ? "Mengunggah..." : "Tambah Lampiran"}
                         <input
                           type="file"
                           className="hidden"
-                          disabled={uploadingAttachment || !canSaveDraft}
+                          disabled={!canUploadAttachment}
                           accept=".pdf,.docx,.xlsx,.xls,.csv,.png,.jpg,.jpeg"
                           onChange={(e) => {
                             const file = e.target.files?.[0] ?? null;
@@ -1011,7 +1065,6 @@ export default function ComposePage() {
             )}
           </div>
         </section>
-      </main>
-    </div>
+    </main>
   );
 }

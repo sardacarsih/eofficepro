@@ -43,6 +43,46 @@ function setTokens(access: string, refresh: string) {
   localStorage.setItem(REFRESH_KEY, refresh);
 }
 
+function apiError(data: unknown): string | null {
+  if (!data || typeof data !== "object" || !("error" in data)) return null;
+  const error = (data as { error: unknown }).error;
+  return typeof error === "string" ? error : null;
+}
+
+async function parseAPIResponse<T>(
+  res: Response,
+  fallbackMessage: string,
+): Promise<T> {
+  const text = await res.text();
+  const snippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
+
+  if (!text) {
+    if (!res.ok) throw new Error(`${fallbackMessage} (${res.status})`);
+    return {} as T;
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (!res.ok) {
+      throw new Error(
+        snippet
+          ? `${fallbackMessage} (${res.status}): ${snippet}`
+          : `${fallbackMessage} (${res.status})`,
+      );
+    }
+    throw new Error(
+      snippet
+        ? `Respons API tidak valid (${res.status}): ${snippet}`
+        : `Respons API tidak valid (${res.status})`,
+    );
+  }
+
+  if (!res.ok) throw new Error(apiError(data) ?? `${fallbackMessage} (${res.status})`);
+  return data as T;
+}
+
 export function clearTokens() {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
@@ -54,10 +94,13 @@ export async function login(identifier: string, password: string): Promise<User>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ identifier, password }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Login gagal");
+  const data = await parseAPIResponse<{
+    access_token: string;
+    refresh_token: string;
+    user: User;
+  }>(res, "Login gagal");
   setTokens(data.access_token, data.refresh_token);
-  return data.user as User;
+  return data.user;
 }
 
 export async function logout() {
@@ -84,7 +127,10 @@ async function tryRefresh(): Promise<boolean> {
     clearTokens();
     return false;
   }
-  const data = await res.json();
+  const data = await parseAPIResponse<{ access_token: string; refresh_token: string }>(
+    res,
+    "Refresh sesi gagal",
+  );
   setTokens(data.access_token, data.refresh_token);
   return true;
 }
@@ -113,9 +159,7 @@ export async function apiFetch<T>(
     throw new Error("Sesi berakhir, silakan login ulang");
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `Permintaan gagal (${res.status})`);
-  return data as T;
+  return parseAPIResponse<T>(res, "Permintaan gagal");
 }
 
 export const getMe = () => apiFetch<User>("/auth/me");
@@ -135,6 +179,17 @@ export interface Position {
 }
 
 export const listPositions = () => apiFetch<{ positions: Position[] }>("/positions");
+
+export interface AssignPositionPayload {
+  user_id: string;
+  assignment_type?: "definitive" | "plt" | "plh";
+}
+
+export const assignPosition = (positionID: string, payload: AssignPositionPayload) =>
+  apiFetch<{ id: string }>(`/positions/${positionID}/assign`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 export interface Company {
   id: string;
@@ -243,10 +298,19 @@ export interface DraftLetter {
   letter_type_id: string;
   letter_type_code: string;
   letter_type_name: string;
+  letter_number: string | null;
   subject: string;
   classification: LetterType["default_classification"];
   priority: "normal" | "urgent";
-  status: "draft" | "revision";
+  status:
+    | "draft"
+    | "submitted"
+    | "in_approval"
+    | "revision"
+    | "approved"
+    | "published"
+    | "cancelled"
+    | "archived";
   creator_position_id: string;
   creator_position_title: string;
   version: number;
@@ -277,6 +341,8 @@ export interface DraftLetterPayload {
 
 export const listDraftLetters = () =>
   apiFetch<{ letters: DraftLetter[] }>("/letters/drafts");
+
+export const listMyLetters = () => apiFetch<{ letters: DraftLetter[] }>("/letters/mine");
 
 export const getDraftLetter = (id: string) =>
   apiFetch<{ letter: DraftLetter }>(`/letters/drafts/${id}`);
@@ -339,9 +405,7 @@ export async function uploadDraftAttachment(
     headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
     body: form,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Upload lampiran gagal");
-  return data as { id: string };
+  return parseAPIResponse<{ id: string }>(res, "Upload lampiran gagal");
 }
 
 export const deleteDraftAttachment = (draftID: string, attachmentID: string) =>
@@ -354,6 +418,102 @@ export const previewDraftLetter = (id: string) =>
 
 export const submitDraftLetter = (id: string) =>
   apiFetch<SubmitDraftResult>(`/letters/drafts/${id}/submit`, { method: "POST" });
+
+// ---- Approval surat ----
+
+export interface ApprovalInboxItem {
+  step_id: string;
+  letter_id: string;
+  step_order: number;
+  status: "waiting";
+  subject: string;
+  priority: DraftLetter["priority"];
+  classification: DraftLetter["classification"];
+  letter_type_code: string;
+  company_code: string;
+  position_title: string;
+  creator_name: string;
+  creator_position: string;
+  body_plain: string;
+  attachment_count: number;
+  updated_at: string;
+}
+
+export interface ApprovalActionPayload {
+  action: "approve" | "reject" | "request_revision";
+  note?: string;
+  client_action_id?: string;
+  device_info?: string;
+}
+
+export interface ApprovalActionResult {
+  letter_id: string;
+  status: DraftLetter["status"];
+}
+
+export const listApprovalInbox = () =>
+  apiFetch<{ approvals: ApprovalInboxItem[] }>("/approvals/inbox");
+
+export const actApprovalStep = (stepID: string, payload: ApprovalActionPayload) =>
+  apiFetch<ApprovalActionResult>(`/approvals/steps/${stepID}/actions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+// ---- Detail surat ----
+
+export interface LetterApprovalStep {
+  id: string;
+  step_order: number;
+  flow_group: number;
+  status: "pending" | "waiting" | "approved" | "rejected" | "skipped";
+  position_title: string;
+  position_type: string;
+  sla_deadline: string | null;
+  decided_at: string | null;
+}
+
+export interface LetterApprovalAction {
+  id: string;
+  step_id: string;
+  action: "approve" | "reject" | "request_revision";
+  actor_name: string;
+  note: string | null;
+  device_info: string | null;
+  created_at: string;
+  position_title: string;
+}
+
+export interface LetterDetail {
+  id: string;
+  company_code: string;
+  company_name: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  letter_number: string | null;
+  subject: string;
+  classification: string;
+  priority: DraftLetter["priority"];
+  status: DraftLetter["status"];
+  creator_name: string;
+  creator_position_title: string;
+  version: number;
+  body_html: string;
+  body_plain: string;
+  qr_token: string | null;
+  verify_url: string | null;
+  final_pdf_url: string | null;
+  recipients: DraftRecipient[];
+  attachments: LetterAttachment[];
+  approval_steps: LetterApprovalStep[];
+  approval_actions: LetterApprovalAction[];
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+}
+
+export const getLetterDetail = (id: string) =>
+  apiFetch<{ letter: LetterDetail }>(`/letters/view/${id}`);
 
 export interface VerifiedLetter {
   id: string;
@@ -371,9 +531,11 @@ export interface VerifiedLetter {
 
 export async function verifyLetter(token: string): Promise<VerifiedLetter> {
   const res = await fetch(`${BASE}/verify/${encodeURIComponent(token)}`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Token verifikasi tidak valid");
-  return data.letter as VerifiedLetter;
+  const data = await parseAPIResponse<{ letter: VerifiedLetter }>(
+    res,
+    "Token verifikasi tidak valid",
+  );
+  return data.letter;
 }
 
 // ---- Reset password (publik) ----
@@ -384,9 +546,8 @@ export async function forgotPassword(email: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Permintaan gagal");
-  return data.message as string;
+  const data = await parseAPIResponse<{ message: string }>(res, "Permintaan gagal");
+  return data.message;
 }
 
 export async function resetPassword(
@@ -398,9 +559,8 @@ export async function resetPassword(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token, new_password: newPassword }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Reset password gagal");
-  return data.message as string;
+  const data = await parseAPIResponse<{ message: string }>(res, "Reset password gagal");
+  return data.message;
 }
 
 // ---- Manajemen pengguna (admin) ----
@@ -455,9 +615,7 @@ export async function importUsers(file: File): Promise<ImportResult> {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
     body: form,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Import gagal");
-  return data as ImportResult;
+  return parseAPIResponse<ImportResult>(res, "Import gagal");
 }
 
 export async function downloadImportTemplate() {
