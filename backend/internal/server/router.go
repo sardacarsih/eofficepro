@@ -14,7 +14,9 @@ import (
 	"github.com/kskgroup/eofficepro/internal/store"
 )
 
-func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
+// NewRouter membangun router beserta handler-nya; handler dikembalikan agar
+// main bisa menjalankan worker latar (mis. pengawas SLA).
+func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handler) {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -124,5 +126,5 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	creator.POST("/letters/drafts/:id/preview", h.PreviewDraftLetter)
 	creator.POST("/letters/drafts/:id/submit", h.SubmitDraftLetter)
 
-	return r
+	return r, h
 }
