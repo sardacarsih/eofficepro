@@ -7,6 +7,7 @@ package handler
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,33 +23,87 @@ const (
 	notificationMaxLimit     = 50
 )
 
+// notificationEmail adalah salinan notifikasi yang baru dibuat untuk dikirim
+// juga sebagai email (E08-3) setelah transaksi commit.
+type notificationEmail struct {
+	Email     string
+	EventType string
+	LetterID  string
+	Title     string
+	Body      string
+}
+
+func collectNotificationEmails(rows pgx.Rows) ([]notificationEmail, error) {
+	defer rows.Close()
+	items := []notificationEmail{}
+	for rows.Next() {
+		var item notificationEmail
+		if err := rows.Scan(&item.Email, &item.EventType, &item.LetterID, &item.Title, &item.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// sendNotificationEmails mengirim email notifikasi (deep link ke web) secara
+// asinkron — kegagalan SMTP tidak menggagalkan aksi utamanya.
+func (h *Handler) sendNotificationEmails(items []notificationEmail) {
+	if len(items) == 0 {
+		return
+	}
+	go func() {
+		for _, item := range items {
+			link := h.Cfg.WebBaseURL + "/letters/" + item.LetterID
+			if item.EventType == "approval_waiting" {
+				link = h.Cfg.WebBaseURL + "/approvals"
+			}
+			body := item.Body + "\n\nBuka di eOffice Pro:\n" + link
+			if err := h.Mailer.Send(item.Email, item.Title, body); err != nil {
+				log.Printf("email notifikasi gagal ke %s: %v", item.Email, err)
+			}
+		}
+	}()
+}
+
 // notifyWaitingApprovers memberi tahu seluruh pemegang aktif jabatan approver
 // pada step berstatus waiting milik surat ini. Dipanggil di dalam transaksi
 // submit/promote sehingga hanya step yang baru menunggu yang ternotifikasi.
-func notifyWaitingApprovers(ctx context.Context, tx pgx.Tx, letterID string) error {
-	_, err := tx.Exec(ctx, `
-		INSERT INTO notifications (user_id, event_type, letter_id, title, body)
-		SELECT DISTINCT up.user_id,
-		       'approval_waiting',
-		       l.id,
-		       'Menunggu approval: ' || l.subject,
-		       'Surat dari ' || cu.full_name || ' menunggu persetujuan Anda sebagai ' || p.title || '.'
-		FROM approval_steps s
-		JOIN letters l ON l.id = s.letter_id
-		JOIN users cu ON cu.id = l.creator_user_id
-		JOIN positions p ON p.id = s.approver_position_id
-		JOIN user_positions up ON up.position_id = s.approver_position_id
-		JOIN users u ON u.id = up.user_id
-		WHERE s.letter_id = $1
-		  AND s.status = 'waiting'
-		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
-		  AND u.status = 'active'`, letterID)
-	return err
+// Mengembalikan data email untuk dikirim setelah commit.
+func notifyWaitingApprovers(ctx context.Context, tx pgx.Tx, letterID string) ([]notificationEmail, error) {
+	rows, err := tx.Query(ctx, `
+		WITH inserted AS (
+			INSERT INTO notifications (user_id, event_type, letter_id, title, body)
+			SELECT DISTINCT up.user_id,
+			       'approval_waiting',
+			       l.id,
+			       'Menunggu approval: ' || l.subject,
+			       'Surat dari ' || cu.full_name || ' menunggu persetujuan Anda sebagai ' || p.title || '.'
+			FROM approval_steps s
+			JOIN letters l ON l.id = s.letter_id
+			JOIN users cu ON cu.id = l.creator_user_id
+			JOIN positions p ON p.id = s.approver_position_id
+			JOIN user_positions up ON up.position_id = s.approver_position_id
+			JOIN users u ON u.id = up.user_id
+			WHERE s.letter_id = $1
+			  AND s.status = 'waiting'
+			  AND current_date >= up.valid_from
+			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+			  AND u.status = 'active'
+			RETURNING user_id, event_type, letter_id, title, body
+		)
+		SELECT u.email, i.event_type, i.letter_id::text, i.title, i.body
+		FROM inserted i
+		JOIN users u ON u.id = i.user_id`, letterID)
+	if err != nil {
+		return nil, err
+	}
+	return collectNotificationEmails(rows)
 }
 
 // notifyApprovalResult memberi tahu pembuat surat hasil akhir approval.
-func notifyApprovalResult(ctx context.Context, tx pgx.Tx, letterID string, letterStatus string) error {
+// Mengembalikan data email untuk dikirim setelah commit.
+func notifyApprovalResult(ctx context.Context, tx pgx.Tx, letterID string, letterStatus string) ([]notificationEmail, error) {
 	var title, body string
 	switch letterStatus {
 	case "published":
@@ -61,15 +116,24 @@ func notifyApprovalResult(ctx context.Context, tx pgx.Tx, letterID string, lette
 		title = "Surat ditolak"
 		body = "Approver menolak surat Anda. Buka surat untuk membaca alasan penolakan."
 	default:
-		return nil
+		return nil, nil
 	}
 
-	_, err := tx.Exec(ctx, `
-		INSERT INTO notifications (user_id, event_type, letter_id, title, body)
-		SELECT l.creator_user_id, 'approval_result', l.id, $2 || ': ' || l.subject, $3
-		FROM letters l
-		WHERE l.id = $1`, letterID, title, body)
-	return err
+	rows, err := tx.Query(ctx, `
+		WITH inserted AS (
+			INSERT INTO notifications (user_id, event_type, letter_id, title, body)
+			SELECT l.creator_user_id, 'approval_result', l.id, $2 || ': ' || l.subject, $3
+			FROM letters l
+			WHERE l.id = $1
+			RETURNING user_id, event_type, letter_id, title, body
+		)
+		SELECT u.email, i.event_type, i.letter_id::text, i.title, i.body
+		FROM inserted i
+		JOIN users u ON u.id = i.user_id`, letterID, title, body)
+	if err != nil {
+		return nil, err
+	}
+	return collectNotificationEmails(rows)
 }
 
 type notificationItem struct {

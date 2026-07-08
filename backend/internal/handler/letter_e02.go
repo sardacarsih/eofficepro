@@ -351,7 +351,8 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		}
 	}
 
-	if err := notifyWaitingApprovers(ctx, tx, letterID); err != nil {
+	approverEmails, err := notifyWaitingApprovers(ctx, tx, letterID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi approval"})
 		return
 	}
@@ -383,6 +384,7 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		"approval_steps": len(route.Steps),
 		"qr_token":       qrToken,
 	}, c.ClientIP())
+	h.sendNotificationEmails(approverEmails)
 	c.JSON(http.StatusOK, gin.H{
 		"id":             letterID,
 		"status":         "in_approval",

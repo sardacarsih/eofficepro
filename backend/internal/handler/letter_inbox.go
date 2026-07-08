@@ -170,7 +170,7 @@ func (h *Handler) markLetterRead(ctx context.Context, userID string, letterID st
 	return nil
 }
 
-func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, publishedAt time.Time) error {
+func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, publishedAt time.Time) ([]notificationEmail, error) {
 	if _, err := tx.Exec(ctx, `
 		UPDATE letter_recipients lr
 		SET delivered_at = COALESCE(lr.delivered_at, $2),
@@ -187,7 +187,7 @@ func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, 
 		    ))
 		WHERE lr.letter_id = $1
 		  AND lr.position_id IS NOT NULL`, letterID, publishedAt); err != nil {
-		return err
+		return nil, err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -195,10 +195,10 @@ func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, 
 		SET delivered_at = COALESCE(delivered_at, $2)
 		WHERE letter_id = $1
 		  AND org_unit_id IS NOT NULL`, letterID, publishedAt); err != nil {
-		return err
+		return nil, err
 	}
 
-	_, err := tx.Exec(ctx, `
+	rows, err := tx.Query(ctx, `
 		WITH RECURSIVE unit_targets AS (
 			SELECT lr.id AS recipient_id, lr.recipient_type, lr.org_unit_id AS unit_id
 			FROM letter_recipients lr
@@ -235,19 +235,28 @@ func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, 
 			SELECT subject
 			FROM letters
 			WHERE id = $1
+		),
+		inserted AS (
+			INSERT INTO notifications (user_id, event_type, letter_id, title, body)
+			SELECT tu.user_id,
+			       'letter_incoming',
+			       $1,
+			       'Surat masuk: ' || ld.subject,
+			       CASE WHEN tu.recipient_type = 'cc'
+			            THEN 'Anda menerima tembusan surat terbit.'
+			            ELSE 'Anda menerima surat terbit untuk ditindaklanjuti.'
+			       END
+			FROM target_users tu
+			CROSS JOIN letter_data ld
+			RETURNING user_id, event_type, letter_id, title, body
 		)
-		INSERT INTO notifications (user_id, event_type, letter_id, title, body)
-		SELECT tu.user_id,
-		       'letter_incoming',
-		       $1,
-		       'Surat masuk: ' || ld.subject,
-		       CASE WHEN tu.recipient_type = 'cc'
-		            THEN 'Anda menerima tembusan surat terbit.'
-		            ELSE 'Anda menerima surat terbit untuk ditindaklanjuti.'
-		       END
-		FROM target_users tu
-		CROSS JOIN letter_data ld`, letterID)
-	return err
+		SELECT u.email, i.event_type, i.letter_id::text, i.title, i.body
+		FROM inserted i
+		JOIN users u ON u.id = i.user_id`, letterID)
+	if err != nil {
+		return nil, err
+	}
+	return collectNotificationEmails(rows)
 }
 
 func recipientAccessSQL(userParam string) string {

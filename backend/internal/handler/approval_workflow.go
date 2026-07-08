@@ -613,6 +613,7 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 
 	letterStatus := "in_approval"
 	var finalPDFKey string
+	var pendingEmails []notificationEmail
 	if req.Action == "approve" {
 		nextStepID, nextOrder, err := promoteNextApprovalStep(ctx, tx, letterID, stepOrder)
 		if err != nil {
@@ -645,16 +646,19 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyelesaikan approval"})
 				return
 			}
-			if err := distributePublishedLetter(ctx, tx, letterID, publishedAt); err != nil {
+			incomingEmails, err := distributePublishedLetter(ctx, tx, letterID, publishedAt)
+			if err != nil {
 				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mendistribusikan surat"})
 				return
 			}
-			if err := notifyApprovalResult(ctx, tx, letterID, letterStatus); err != nil {
+			resultEmails, err := notifyApprovalResult(ctx, tx, letterID, letterStatus)
+			if err != nil {
 				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi hasil approval"})
 				return
 			}
+			pendingEmails = append(incomingEmails, resultEmails...)
 		} else {
 			if _, err := tx.Exec(ctx, `
 				UPDATE letters
@@ -663,7 +667,8 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui surat"})
 				return
 			}
-			if err := notifyWaitingApprovers(ctx, tx, letterID); err != nil {
+			pendingEmails, err = notifyWaitingApprovers(ctx, tx, letterID)
+			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi approval"})
 				return
 			}
@@ -687,7 +692,8 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui status surat"})
 			return
 		}
-		if err := notifyApprovalResult(ctx, tx, letterID, letterStatus); err != nil {
+		pendingEmails, err = notifyApprovalResult(ctx, tx, letterID, letterStatus)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi hasil approval"})
 			return
 		}
@@ -702,6 +708,7 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 		"step_id": stepID,
 		"status":  letterStatus,
 	}, c.ClientIP())
+	h.sendNotificationEmails(pendingEmails)
 	c.JSON(http.StatusOK, gin.H{"letter_id": letterID, "status": letterStatus})
 }
 
