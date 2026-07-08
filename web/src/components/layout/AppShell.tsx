@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { User } from "@/lib/api";
 import Sidebar from "./Sidebar";
 import ChangePasswordModal from "./ChangePasswordModal";
@@ -35,6 +36,7 @@ interface AppShellProps {
 // App shell bersama: sidebar navy + header (judul halaman, search,
 // notifikasi, avatar). Semua halaman ber-autentikasi dirender di dalamnya.
 export default function AppShell({ me, title, onLogout, children }: AppShellProps) {
+  const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -96,17 +98,25 @@ export default function AppShell({ me, title, onLogout, children }: AppShellProp
             {title}
           </h1>
 
-          <div className="relative ml-2 hidden max-w-md flex-1 md:block">
+          <form
+            className="relative ml-2 hidden max-w-md flex-1 md:block"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const query = search.trim();
+              if (query.length >= 2)
+                router.push(`/search?q=${encodeURIComponent(query)}`);
+            }}
+          >
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Cari dokumen, disposisi, memo..."
-              aria-label="Cari dokumen, disposisi, memo"
+              placeholder="Cari nomor, perihal, atau isi surat..."
+              aria-label="Cari nomor, perihal, atau isi surat"
               className="w-full rounded-xl border border-zinc-200 bg-zinc-50 py-2 pl-9 pr-3 text-sm text-zinc-800 placeholder:text-zinc-400 transition focus:border-navy-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:focus:bg-zinc-900 dark:focus:ring-navy-800"
             />
-          </div>
+          </form>
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <NotificationBell />

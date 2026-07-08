@@ -17,6 +17,7 @@ const PAGE_TITLES: { prefix: string; title: string }[] = [
   { prefix: "/letter-templates", title: "Template Surat" },
   { prefix: "/letters", title: "Detail Surat" },
   { prefix: "/profile", title: "Profil Saya" },
+  { prefix: "/search", title: "Pencarian" },
 ];
 
 // Layout bersama semua halaman ber-autentikasi: guard token, fetch profil

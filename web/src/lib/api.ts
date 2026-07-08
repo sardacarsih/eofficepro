@@ -648,6 +648,28 @@ export async function resetPassword(
   return data.message;
 }
 
+// ---- Pencarian surat ----
+
+export interface LetterSearchResult {
+  id: string;
+  company_code: string;
+  letter_type_code: string;
+  letter_number: string | null;
+  subject: string;
+  status: string;
+  classification: string;
+  creator_name: string;
+  origin: "mine" | "received";
+  snippet: string;
+  published_at: string | null;
+  updated_at: string;
+}
+
+export const searchLetters = (query: string) =>
+  apiFetch<{ results: LetterSearchResult[]; query: string }>(
+    `/letters/search?q=${encodeURIComponent(query)}`,
+  );
+
 // ---- Dashboard ----
 
 export interface DashboardSummary {
