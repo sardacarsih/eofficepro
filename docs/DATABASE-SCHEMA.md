@@ -202,6 +202,8 @@ numbering_counters(id, format_id FK, scope_key varchar,  -- mis. 'HRGA-HO|ND|202
 | resolved_user_id | uuid NULL | pemegang jabatan saat terbit (snapshot) |
 | delivered_at | timestamptz | |
 
+**Aturan lintas direktorat:** draft surat hanya boleh ditujukan lintas direktorat bila `creator_position_id.position_type` adalah `dept_head`, `gm`, `director`, `vp_director`, atau `president_director`. Target lintas direktorat harus berupa `position_id`; target `org_unit_id` lintas direktorat ditolak agar aturan level tidak dilewati lewat broadcast unit. Jika sisi pembuat atau penerima tidak berada di bawah unit level `directorate`, validasi lintas direktorat tidak diterapkan.
+
 ### `letter_attachments`
 `id, letter_id, file_name, mime_type, size_bytes, storage_key, checksum_sha256, uploaded_by, created_at` — akses selalu via pre-signed URL + cek klasifikasi.
 

@@ -249,7 +249,13 @@ export default function UsersPage() {
               eOffice Pro
             </span>
           </div>
-          <nav className="flex gap-4 text-sm">
+          <nav className="flex flex-wrap gap-4 text-sm">
+            <Link
+              href="/compose"
+              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              Tulis Surat
+            </Link>
             <Link
               href="/organization"
               className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
@@ -264,6 +270,12 @@ export default function UsersPage() {
               className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
             >
               Jenis Surat
+            </Link>
+            <Link
+              href="/letter-templates"
+              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              Template
             </Link>
           </nav>
         </div>

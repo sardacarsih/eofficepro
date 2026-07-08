@@ -51,7 +51,7 @@
 | E02-1 | Master jenis surat (8 jenis awal PRD §7.1) + klasifikasi default | Admin dapat CRUD | 3 |
 | E02-2 | Engine template: kop per perusahaan, placeholder field, posisi ttd & QR | Template Nota Dinas & Memo jadi acuan | 8 |
 | E02-3 | Composer surat (rich text terbatas: heading, list, tabel, bold/italic) | Autosave 30 dtk; validasi field wajib | 8 |
-| E02-4 | Pemilih penerima To/CC berbasis jabatan/unit dengan pencarian | Multi-penerima; broadcast ke unit | 5 |
+| E02-4 | Pemilih penerima To/CC berbasis jabatan/unit dengan pencarian | Multi-penerima; broadcast ke unit; lintas direktorat hanya untuk pembuat `dept_head+` dan wajib target jabatan | 5 |
 | E02-5 | Upload lampiran multi-file (25 MB/file, whitelist tipe, scan antivirus) | | 5 |
 | E02-6 | Preview & render PDF final + QR verifikasi | PDF pixel-perfect vs template resmi | 8 |
 | E02-7 | Halaman verifikasi QR publik-terbatas (metadata + status keaslian) | Scan QR → info surat tanpa isi konten | 3 |

@@ -1,0 +1,822 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import RichTextEditor from "@/components/RichTextEditor";
+import {
+  createDraftLetter,
+  getAccessToken,
+  getMe,
+  getOrgTree,
+  listCompanies,
+  listDraftLetters,
+  listLetterTemplates,
+  listLetterTypes,
+  listPositions,
+  logout,
+  updateDraftLetter,
+  type Company,
+  type DraftRecipient,
+  type DraftLetter,
+  type DraftLetterPayload,
+  type LetterTemplate,
+  type LetterType,
+  type OrgUnit,
+  type Position,
+  type User,
+} from "@/lib/api";
+
+type SaveState = "idle" | "saving" | "saved" | "error";
+
+interface ComposerForm {
+  id: string | null;
+  company_id: string;
+  letter_type_id: string;
+  template_id: string;
+  creator_position_id: string;
+  subject: string;
+  classification: LetterType["default_classification"];
+  priority: DraftLetterPayload["priority"];
+  body_html: string;
+  recipients: DraftRecipient[];
+  version: number;
+}
+
+type RecipientType = DraftRecipient["type"];
+type RecipientTargetType = DraftRecipient["target_type"];
+
+function emptyForm(
+  companies: Company[],
+  letterTypes: LetterType[],
+  user: User | null,
+): ComposerForm {
+  const firstType = letterTypes[0];
+  return {
+    id: null,
+    company_id: companies[0]?.id ?? "",
+    letter_type_id: firstType?.id ?? "",
+    template_id: "",
+    creator_position_id: user?.positions?.[0]?.position_id ?? "",
+    subject: "",
+    classification: firstType?.default_classification ?? "biasa",
+    priority: "normal",
+    body_html: "",
+    recipients: [],
+    version: 0,
+  };
+}
+
+function draftToForm(draft: DraftLetter): ComposerForm {
+  return {
+    id: draft.id,
+    company_id: draft.company_id,
+    letter_type_id: draft.letter_type_id,
+    template_id: "",
+    creator_position_id: draft.creator_position_id,
+    subject: draft.subject,
+    classification: draft.classification,
+    priority: draft.priority,
+    body_html: draft.body_html,
+    recipients: draft.recipients,
+    version: draft.version,
+  };
+}
+
+function validForSave(form: ComposerForm): boolean {
+  return Boolean(
+    form.company_id &&
+      form.letter_type_id &&
+      form.creator_position_id &&
+      form.subject.trim() &&
+      form.recipients.some((recipient) => recipient.type === "to") &&
+      form.body_html.replace(/<[^>]*>/g, "").trim(),
+  );
+}
+
+function compactPayload(form: ComposerForm): DraftLetterPayload {
+  if (!validForSave(form)) {
+    throw new Error("Perusahaan, jenis, jabatan, perihal, dan isi surat wajib diisi");
+  }
+
+  return {
+    company_id: form.company_id,
+    letter_type_id: form.letter_type_id,
+    creator_position_id: form.creator_position_id,
+    subject: form.subject.trim(),
+    classification: form.classification,
+    priority: form.priority,
+    body_html: form.body_html.trim(),
+    recipients: form.recipients.map((recipient) => ({
+      type: recipient.type,
+      target_type: recipient.target_type,
+      target_id: recipient.target_id,
+    })),
+  };
+}
+
+function flattenOrgUnits(units: OrgUnit[]): OrgUnit[] {
+  return units.flatMap((unit) => [unit, ...flattenOrgUnits(unit.children ?? [])]);
+}
+
+function bodySkeletonForComposer(bodySkeleton: string): string {
+  return bodySkeleton
+    .replace(/<p>\s*Yth\.\s*\{\{tujuan\}\}\s*<\/p>\s*/i, "")
+    .replace(/\{\{tujuan\}\}/gi, "")
+    .trim();
+}
+
+const MANAGER_OR_ABOVE_POSITION_TYPES = new Set([
+  "dept_head",
+  "gm",
+  "director",
+  "vp_director",
+  "president_director",
+]);
+
+function isManagerOrAbove(positionType: string): boolean {
+  return MANAGER_OR_ABOVE_POSITION_TYPES.has(positionType);
+}
+
+function directorateIDForOrgUnit(
+  orgUnitID: string,
+  orgUnitByID: Map<string, OrgUnit>,
+): string | null {
+  let current = orgUnitByID.get(orgUnitID);
+  const visited = new Set<string>();
+
+  while (current && !visited.has(current.id)) {
+    if (current.unit_level === "directorate") return current.id;
+    visited.add(current.id);
+    current = current.parent_id ? orgUnitByID.get(current.parent_id) : undefined;
+  }
+
+  return null;
+}
+
+function positionDirectorateID(
+  position: Position | undefined,
+  orgUnitByID: Map<string, OrgUnit>,
+): string | null {
+  return position ? directorateIDForOrgUnit(position.org_unit_id, orgUnitByID) : null;
+}
+
+function recipientPolicyMessage(
+  creatorPosition: Position | undefined,
+  recipient: DraftRecipient,
+  positions: Position[],
+  orgUnitByID: Map<string, OrgUnit>,
+): string | null {
+  const creatorDirectorateID = positionDirectorateID(creatorPosition, orgUnitByID);
+  const targetDirectorateID =
+    recipient.target_type === "position"
+      ? positionDirectorateID(
+          positions.find((position) => position.id === recipient.target_id),
+          orgUnitByID,
+        )
+      : directorateIDForOrgUnit(recipient.target_id, orgUnitByID);
+
+  if (!creatorDirectorateID || !targetDirectorateID) return null;
+  if (creatorDirectorateID === targetDirectorateID) return null;
+  if (!creatorPosition || !isManagerOrAbove(creatorPosition.position_type)) {
+    return "Surat lintas direktorat hanya dapat dibuat oleh level manager ke atas.";
+  }
+  if (recipient.target_type === "org_unit") {
+    return "Penerima Unit lintas direktorat tidak diizinkan; pilih Jabatan tujuan.";
+  }
+  return null;
+}
+
+export default function ComposePage() {
+  const router = useRouter();
+  const [me, setMe] = useState<User | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
+  const [templates, setTemplates] = useState<LetterTemplate[]>([]);
+  const [recipientPositions, setRecipientPositions] = useState<Position[]>([]);
+  const [recipientOrgUnits, setRecipientOrgUnits] = useState<OrgUnit[]>([]);
+  const [drafts, setDrafts] = useState<DraftLetter[]>([]);
+  const [form, setForm] = useState<ComposerForm | null>(null);
+  const [recipientType, setRecipientType] = useState<RecipientType>("to");
+  const [recipientTargetType, setRecipientTargetType] =
+    useState<RecipientTargetType>("position");
+  const [recipientTargetID, setRecipientTargetID] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const reloadDrafts = useCallback(async () => {
+    const data = await listDraftLetters();
+    setDrafts(data.letters);
+  }, []);
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/login");
+      return;
+    }
+
+    Promise.all([
+      getMe(),
+      listCompanies(),
+      listPositions(),
+      getOrgTree(),
+      listLetterTypes(false),
+      listLetterTemplates(false),
+      listDraftLetters(),
+    ])
+      .then(([user, companyData, positionData, orgData, typeData, templateData, draftData]) => {
+        setMe(user);
+        setCompanies(companyData.companies);
+        setRecipientPositions(positionData.positions);
+        setRecipientOrgUnits(flattenOrgUnits(orgData.tree));
+        setLetterTypes(typeData.letter_types);
+        setTemplates(templateData.letter_templates);
+        setDrafts(draftData.letters);
+        setForm(emptyForm(companyData.companies, typeData.letter_types, user));
+        setRecipientTargetID(positionData.positions[0]?.id ?? "");
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Gagal memuat composer"),
+      )
+      .finally(() => setLoading(false));
+  }, [router]);
+
+  const matchingTemplates = useMemo(() => {
+    if (!form) return [];
+    return templates.filter(
+      (template) =>
+        template.company_id === form.company_id &&
+        template.letter_type_id === form.letter_type_id,
+    );
+  }, [form, templates]);
+
+  const orgUnitByID = useMemo(() => {
+    const byID = new Map<string, OrgUnit>();
+    recipientOrgUnits.forEach((unit) => byID.set(unit.id, unit));
+    return byID;
+  }, [recipientOrgUnits]);
+
+  const selectedCreatorPosition = useMemo(
+    () => recipientPositions.find((position) => position.id === form?.creator_position_id),
+    [form?.creator_position_id, recipientPositions],
+  );
+
+  const creatorDirectorateID = useMemo(
+    () => positionDirectorateID(selectedCreatorPosition, orgUnitByID),
+    [orgUnitByID, selectedCreatorPosition],
+  );
+
+  const creatorCanSendCrossDirectorate = Boolean(
+    selectedCreatorPosition && isManagerOrAbove(selectedCreatorPosition.position_type),
+  );
+
+  const filteredRecipientPositions = useMemo(() => {
+    if (!creatorDirectorateID || creatorCanSendCrossDirectorate) return recipientPositions;
+    return recipientPositions.filter(
+      (position) => positionDirectorateID(position, orgUnitByID) === creatorDirectorateID,
+    );
+  }, [creatorCanSendCrossDirectorate, creatorDirectorateID, orgUnitByID, recipientPositions]);
+
+  const filteredRecipientOrgUnits = useMemo(() => {
+    if (!creatorDirectorateID) return recipientOrgUnits;
+    return recipientOrgUnits.filter(
+      (unit) => directorateIDForOrgUnit(unit.id, orgUnitByID) === creatorDirectorateID,
+    );
+  }, [creatorDirectorateID, orgUnitByID, recipientOrgUnits]);
+
+  const recipientPolicyErrors = useMemo(() => {
+    if (!form) return [];
+    return form.recipients
+      .map((recipient) => ({
+        key: `${recipient.type}-${recipient.target_type}-${recipient.target_id}`,
+        label: recipient.label,
+        message: recipientPolicyMessage(
+          selectedCreatorPosition,
+          recipient,
+          recipientPositions,
+          orgUnitByID,
+        ),
+      }))
+      .filter((item): item is { key: string; label: string; message: string } =>
+        Boolean(item.message),
+      );
+  }, [form, orgUnitByID, recipientPositions, selectedCreatorPosition]);
+
+  const recipientOptions =
+    recipientTargetType === "position" ? filteredRecipientPositions : filteredRecipientOrgUnits;
+  const selectedRecipientTargetID = recipientOptions.some(
+    (option) => option.id === recipientTargetID,
+  )
+    ? recipientTargetID
+    : recipientOptions[0]?.id ?? "";
+
+  const canSaveDraft = Boolean(
+    form && validForSave(form) && recipientPolicyErrors.length === 0,
+  );
+
+  const activeError = error ?? recipientPolicyErrors[0]?.message ?? null;
+
+  function updateForm(patch: Partial<ComposerForm>) {
+    setForm((current) => (current ? { ...current, ...patch } : current));
+    setDirty(true);
+    setSaveState("idle");
+  }
+
+  function selectLetterType(letterTypeID: string) {
+    const letterType = letterTypes.find((item) => item.id === letterTypeID);
+    updateForm({
+      letter_type_id: letterTypeID,
+      template_id: "",
+      classification: letterType?.default_classification ?? "biasa",
+    });
+  }
+
+  function applyTemplate(templateID: string) {
+    const template = templates.find((item) => item.id === templateID);
+    if (!template) {
+      updateForm({ template_id: templateID });
+      return;
+    }
+    updateForm({
+      template_id: templateID,
+      body_html: bodySkeletonForComposer(template.body_skeleton),
+    });
+  }
+
+  function changeRecipientTargetType(targetType: RecipientTargetType) {
+    setRecipientTargetType(targetType);
+  }
+
+  function addRecipient() {
+    if (!form || !selectedRecipientTargetID) return;
+
+    const label =
+      recipientTargetType === "position"
+        ? (() => {
+            const position = recipientPositions.find(
+              (item) => item.id === selectedRecipientTargetID,
+            );
+            return position ? `${position.title} - ${position.org_unit_name}` : "";
+          })()
+        : recipientOrgUnits.find((unit) => unit.id === selectedRecipientTargetID)?.name ?? "";
+    if (!label) return;
+
+    const exists = form.recipients.some(
+      (recipient) =>
+        recipient.type === recipientType &&
+        recipient.target_type === recipientTargetType &&
+        recipient.target_id === selectedRecipientTargetID,
+    );
+    if (exists) return;
+
+    updateForm({
+      recipients: [
+        ...form.recipients,
+        {
+          type: recipientType,
+          target_type: recipientTargetType,
+          target_id: selectedRecipientTargetID,
+          label,
+        },
+      ],
+    });
+  }
+
+  function removeRecipient(recipient: DraftRecipient) {
+    if (!form) return;
+    updateForm({
+      recipients: form.recipients.filter(
+        (item) =>
+          !(
+            item.type === recipient.type &&
+            item.target_type === recipient.target_type &&
+            item.target_id === recipient.target_id
+          ),
+      ),
+    });
+  }
+
+  function openDraft(draft: DraftLetter) {
+    setForm(draftToForm(draft));
+    setDirty(false);
+    setSaveState("idle");
+    setLastSavedAt(new Date(draft.updated_at).toLocaleTimeString("id-ID"));
+    setError(null);
+  }
+
+  function newDraft() {
+    setForm(emptyForm(companies, letterTypes, me));
+    setDirty(false);
+    setSaveState("idle");
+    setLastSavedAt(null);
+    setError(null);
+  }
+
+  const saveDraft = useCallback(async (mode: "manual" | "auto") => {
+    if (!form) return;
+    if (recipientPolicyErrors.length > 0) {
+      setSaveState("error");
+      if (mode === "manual") setError(recipientPolicyErrors[0].message);
+      return;
+    }
+    setSaveState("saving");
+    setError(null);
+    try {
+      const payload = compactPayload(form);
+      const result = form.id
+        ? await updateDraftLetter(form.id, payload)
+        : await createDraftLetter(payload);
+
+      setForm((current) =>
+        current
+          ? { ...current, id: result.id, version: result.version }
+          : current,
+      );
+      setDirty(false);
+      setSaveState("saved");
+      setLastSavedAt(new Date().toLocaleTimeString("id-ID"));
+      await reloadDrafts();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Gagal menyimpan draft";
+      setSaveState("error");
+      if (mode === "manual") setError(message);
+    }
+  }, [form, recipientPolicyErrors, reloadDrafts]);
+
+  useEffect(() => {
+    if (!dirty || !form || !validForSave(form) || recipientPolicyErrors.length > 0) return;
+    const timer = window.setTimeout(() => {
+      void saveDraft("auto");
+    }, 30000);
+    return () => window.clearTimeout(timer);
+  }, [dirty, form, recipientPolicyErrors.length, saveDraft]);
+
+  async function handleLogout() {
+    await logout();
+    router.replace("/login");
+  }
+
+  const canCompose =
+    me?.roles.some((role) => ["admin", "creator", "secretary"].includes(role)) ?? false;
+  const creatorPositions = me?.positions ?? [];
+
+  return (
+    <div className="flex min-h-screen flex-1 flex-col bg-[#f5f7fa] text-[#172033] dark:bg-zinc-950 dark:text-zinc-50">
+      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex items-center gap-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-700 text-sm font-bold text-white">
+              e
+            </div>
+            <span className="font-semibold text-zinc-900 dark:text-zinc-50">
+              eOffice Pro
+            </span>
+          </div>
+          <nav className="flex flex-wrap gap-4 text-sm">
+            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+              Tulis Surat
+            </span>
+            <Link
+              href="/organization"
+              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              Organisasi
+            </Link>
+            {me?.roles.includes("admin") && (
+              <>
+                <Link
+                  href="/users"
+                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  Pengguna
+                </Link>
+                <Link
+                  href="/letter-types"
+                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  Jenis Surat
+                </Link>
+                <Link
+                  href="/letter-templates"
+                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  Template
+                </Link>
+              </>
+            )}
+          </nav>
+        </div>
+        <div className="flex items-center gap-4 text-sm">
+          {me && (
+            <span className="hidden text-zinc-600 dark:text-zinc-400 sm:inline">
+              {me.full_name}
+            </span>
+          )}
+          <button
+            onClick={handleLogout}
+            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            Keluar
+          </button>
+        </div>
+      </header>
+
+      <main className="mx-auto grid w-full max-w-7xl flex-1 gap-6 px-6 py-8 lg:grid-cols-[320px_1fr]">
+        <aside className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                Draft Saya
+              </h2>
+              <p className="text-xs text-zinc-500">{drafts.length} draft aktif</p>
+            </div>
+            <button
+              onClick={newDraft}
+              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
+            >
+              Baru
+            </button>
+          </div>
+          <div className="max-h-[calc(100vh-180px)] overflow-y-auto p-2">
+            {loading && <p className="px-2 py-4 text-sm text-zinc-500">Memuat...</p>}
+            {!loading && drafts.length === 0 && (
+              <p className="px-2 py-4 text-sm text-zinc-500">Belum ada draft.</p>
+            )}
+            {drafts.map((draft) => (
+              <button
+                key={draft.id}
+                onClick={() => openDraft(draft)}
+                className={`mb-2 w-full rounded-lg border px-3 py-2 text-left transition ${
+                  form?.id === draft.id
+                    ? "border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40"
+                    : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                }`}
+              >
+                <div className="line-clamp-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  {draft.subject}
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2 text-xs text-zinc-500">
+                  <span>{draft.letter_type_code} v{draft.version}</span>
+                  <span>{new Date(draft.updated_at).toLocaleDateString("id-ID")}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <section className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+            <div>
+              <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+                Tulis Surat
+              </h1>
+              <p className="text-sm text-zinc-500">
+                {form?.id ? `Draft v${form.version}` : "Draft baru"} · autosave 30 detik
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              {saveState !== "idle" && (
+                <span className="text-xs text-zinc-500">
+                  {saveState === "saving" && "Menyimpan..."}
+                  {saveState === "saved" && `Tersimpan ${lastSavedAt ?? ""}`}
+                  {saveState === "error" && "Gagal autosave"}
+                </span>
+              )}
+              <button
+                onClick={() => void saveDraft("manual")}
+                disabled={!canSaveDraft || saveState === "saving"}
+                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Simpan Draft
+              </button>
+            </div>
+          </div>
+
+          <div className="p-5">
+            {activeError && (
+              <p
+                role="alert"
+                className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+              >
+                {activeError}
+              </p>
+            )}
+            {!loading && !canCompose && (
+              <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
+                Akun ini belum memiliki role pembuat surat.
+              </p>
+            )}
+            {!loading && canCompose && creatorPositions.length === 0 && (
+              <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
+                Akun ini belum ditempatkan ke jabatan aktif.
+              </p>
+            )}
+            {form && canCompose && creatorPositions.length > 0 && (
+              <div className="grid gap-4">
+                <div className="grid gap-4 md:grid-cols-4">
+                  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                    Perusahaan
+                    <select
+                      value={form.company_id}
+                      onChange={(e) =>
+                        updateForm({ company_id: e.target.value, template_id: "" })
+                      }
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    >
+                      {companies.map((company) => (
+                        <option key={company.id} value={company.id}>
+                          {company.code}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                    Jenis Surat
+                    <select
+                      value={form.letter_type_id}
+                      onChange={(e) => selectLetterType(e.target.value)}
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    >
+                      {letterTypes.map((letterType) => (
+                        <option key={letterType.id} value={letterType.id}>
+                          {letterType.code} - {letterType.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 md:col-span-2">
+                    Jabatan Pembuat
+                    <select
+                      value={form.creator_position_id}
+                      onChange={(e) => updateForm({ creator_position_id: e.target.value })}
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    >
+                      {creatorPositions.map((position) => (
+                        <option key={position.position_id} value={position.position_id}>
+                          {position.title} · {position.org_unit}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 md:col-span-2">
+                    Template
+                    <select
+                      value={form.template_id}
+                      onChange={(e) => applyTemplate(e.target.value)}
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    >
+                      <option value="">Tanpa template</option>
+                      {matchingTemplates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.letter_type_code} v{template.version} · {template.company_code}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                    Klasifikasi
+                    <select
+                      value={form.classification}
+                      onChange={(e) =>
+                        updateForm({
+                          classification: e.target
+                            .value as LetterType["default_classification"],
+                        })
+                      }
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    >
+                      <option value="biasa">Biasa</option>
+                      <option value="terbatas">Terbatas</option>
+                      <option value="rahasia">Rahasia</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                    Prioritas
+                    <select
+                      value={form.priority}
+                      onChange={(e) =>
+                        updateForm({ priority: e.target.value as DraftLetterPayload["priority"] })
+                      }
+                      className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                    >
+                      <option value="normal">Normal</option>
+                      <option value="urgent">Urgent</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Penerima
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
+                    <div className="grid gap-2 md:grid-cols-[120px_150px_1fr_auto]">
+                      <select
+                        value={recipientType}
+                        onChange={(e) => setRecipientType(e.target.value as RecipientType)}
+                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      >
+                        <option value="to">To</option>
+                        <option value="cc">CC</option>
+                      </select>
+                      <select
+                        value={recipientTargetType}
+                        onChange={(e) =>
+                          changeRecipientTargetType(e.target.value as RecipientTargetType)
+                        }
+                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      >
+                        <option value="position">Jabatan</option>
+                        <option value="org_unit">Unit</option>
+                      </select>
+                      <select
+                        value={selectedRecipientTargetID}
+                        onChange={(e) => setRecipientTargetID(e.target.value)}
+                        className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      >
+                        {recipientOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {"title" in option
+                              ? `${option.title} · ${option.org_unit_name}`
+                              : `${option.name} · ${option.code}`}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={addRecipient}
+                        disabled={!selectedRecipientTargetID}
+                        className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Tambah
+                      </button>
+                    </div>
+
+                    {recipientPolicyErrors.length > 0 && (
+                      <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-normal text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+                        {recipientPolicyErrors.map((item) => (
+                          <p key={item.key}>
+                            {item.label}: {item.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {(["to", "cc"] as const).map((type) => (
+                        <div key={type}>
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            {type === "to" ? "To" : "CC"}
+                          </p>
+                          <div className="flex min-h-10 flex-wrap gap-2">
+                            {form.recipients
+                              .filter((recipient) => recipient.type === type)
+                              .map((recipient) => (
+                                <button
+                                  key={`${recipient.type}-${recipient.target_type}-${recipient.target_id}`}
+                                  type="button"
+                                  onClick={() => removeRecipient(recipient)}
+                                  className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                >
+                                  {recipient.label} x
+                                </button>
+                              ))}
+                            {form.recipients.filter((recipient) => recipient.type === type)
+                              .length === 0 && (
+                              <span className="text-xs font-normal text-zinc-400">
+                                Belum ada penerima
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Perihal
+                  <input
+                    value={form.subject}
+                    onChange={(e) => updateForm({ subject: e.target.value })}
+                    maxLength={255}
+                    className="h-11 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  />
+                </label>
+
+                <div className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Isi Surat
+                  <RichTextEditor
+                    value={form.body_html}
+                    onChange={(bodyHTML) => updateForm({ body_html: bodyHTML })}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}

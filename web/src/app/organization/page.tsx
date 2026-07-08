@@ -105,7 +105,15 @@ export default function OrganizationPage() {
               eOffice Pro
             </span>
           </div>
-          <nav className="flex gap-4 text-sm">
+          <nav className="flex flex-wrap gap-4 text-sm">
+            {me?.roles.some((role) => ["admin", "creator", "secretary"].includes(role)) && (
+              <a
+                href="/compose"
+                className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+              >
+                Tulis Surat
+              </a>
+            )}
             <span className="font-semibold text-emerald-700 dark:text-emerald-400">
               Organisasi
             </span>
@@ -122,6 +130,12 @@ export default function OrganizationPage() {
                   className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
                 >
                   Jenis Surat
+                </a>
+                <a
+                  href="/letter-templates"
+                  className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  Template
                 </a>
               </>
             )}

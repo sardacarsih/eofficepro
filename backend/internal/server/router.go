@@ -59,7 +59,11 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 
 	authed.GET("/org-units", h.OrgTree)
 	authed.GET("/positions", h.ListPositions)
+	authed.GET("/companies", h.ListCompanies)
 	authed.GET("/letter-types", h.ListLetterTypes)
+	authed.GET("/letter-templates", h.ListLetterTemplates)
+	authed.GET("/letters/drafts", h.ListDraftLetters)
+	authed.GET("/letters/drafts/:id", h.GetDraftLetter)
 
 	// Khusus admin
 	admin := authed.Group("", middleware.RequireRole("admin"))
@@ -71,12 +75,20 @@ func NewRouter(cfg *config.Config, st *store.Store) *gin.Engine {
 	admin.POST("/letter-types", h.CreateLetterType)
 	admin.PUT("/letter-types/:id", h.UpdateLetterType)
 	admin.DELETE("/letter-types/:id", h.DeactivateLetterType)
+	admin.POST("/letter-templates", h.CreateLetterTemplate)
+	admin.PUT("/letter-templates/:id", h.UpdateLetterTemplate)
+	admin.POST("/letter-templates/:id/activate", h.ActivateLetterTemplate)
+	admin.DELETE("/letter-templates/:id", h.DeactivateLetterTemplate)
 	admin.GET("/users", h.ListUsers)
 	admin.POST("/users", h.CreateUser)
 	admin.PUT("/users/:id", h.UpdateUser)
 	admin.DELETE("/users/:id", h.DeactivateUser)
 	admin.GET("/users/import/template", h.ImportTemplate)
 	admin.POST("/users/import", h.ImportUsers)
+
+	creator := authed.Group("", middleware.RequireRole("admin", "creator", "secretary"))
+	creator.POST("/letters/drafts", h.CreateDraftLetter)
+	creator.PUT("/letters/drafts/:id", h.UpdateDraftLetter)
 
 	return r
 }

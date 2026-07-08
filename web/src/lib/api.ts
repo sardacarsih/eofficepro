@@ -122,6 +122,29 @@ export const getMe = () => apiFetch<User>("/auth/me");
 export const getOrgTree = () =>
   apiFetch<{ tree: OrgUnit[]; total: number }>("/org-units");
 
+export interface Position {
+  id: string;
+  title: string;
+  position_type: string;
+  is_approver: boolean;
+  reports_to: string | null;
+  org_unit_id: string;
+  org_unit_name: string;
+  holder_name: string;
+  holder_user_id: string;
+}
+
+export const listPositions = () => apiFetch<{ positions: Position[] }>("/positions");
+
+export interface Company {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+export const listCompanies = () => apiFetch<{ companies: Company[] }>("/companies");
+
 // ---- Master jenis surat ----
 
 export interface LetterType {
@@ -160,6 +183,115 @@ export const updateLetterType = (id: string, payload: LetterTypePayload) =>
 
 export const deactivateLetterType = (id: string) =>
   apiFetch<{ id: string }>(`/letter-types/${id}`, { method: "DELETE" });
+
+// ---- Template surat ----
+
+export interface LetterTemplate {
+  id: string;
+  letter_type_id: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  version: number;
+  layout_config: Record<string, unknown>;
+  body_skeleton: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface LetterTemplatePayload {
+  letter_type_id: string;
+  company_id: string;
+  version?: number;
+  layout_config: Record<string, unknown>;
+  body_skeleton: string;
+  is_active?: boolean;
+}
+
+export const listLetterTemplates = (includeInactive = false) =>
+  apiFetch<{ letter_templates: LetterTemplate[] }>(
+    `/letter-templates${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export const createLetterTemplate = (payload: LetterTemplatePayload) =>
+  apiFetch<{ id: string }>("/letter-templates", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateLetterTemplate = (id: string, payload: LetterTemplatePayload) =>
+  apiFetch<{ id: string }>(`/letter-templates/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const activateLetterTemplate = (id: string) =>
+  apiFetch<{ id: string }>(`/letter-templates/${id}/activate`, { method: "POST" });
+
+export const deactivateLetterTemplate = (id: string) =>
+  apiFetch<{ id: string }>(`/letter-templates/${id}`, { method: "DELETE" });
+
+// ---- Draft surat ----
+
+export interface DraftLetter {
+  id: string;
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  letter_type_id: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  subject: string;
+  classification: LetterType["default_classification"];
+  priority: "normal" | "urgent";
+  status: "draft" | "revision";
+  creator_position_id: string;
+  creator_position_title: string;
+  version: number;
+  body_html: string;
+  body_plain: string;
+  recipients: DraftRecipient[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftRecipient {
+  type: "to" | "cc";
+  target_type: "position" | "org_unit";
+  target_id: string;
+  label: string;
+}
+
+export interface DraftLetterPayload {
+  company_id: string;
+  letter_type_id: string;
+  creator_position_id: string;
+  subject: string;
+  classification?: LetterType["default_classification"];
+  priority: DraftLetter["priority"];
+  body_html: string;
+  recipients: Omit<DraftRecipient, "label">[];
+}
+
+export const listDraftLetters = () =>
+  apiFetch<{ letters: DraftLetter[] }>("/letters/drafts");
+
+export const getDraftLetter = (id: string) =>
+  apiFetch<{ letter: DraftLetter }>(`/letters/drafts/${id}`);
+
+export const createDraftLetter = (payload: DraftLetterPayload) =>
+  apiFetch<{ id: string; version: number }>("/letters/drafts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateDraftLetter = (id: string, payload: DraftLetterPayload) =>
+  apiFetch<{ id: string; version: number }>(`/letters/drafts/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 
 // ---- Reset password (publik) ----
 
