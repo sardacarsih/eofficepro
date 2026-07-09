@@ -13,17 +13,11 @@ import {
   type DispositionStatus,
   type DraftLetter,
   type IncomingLetter,
+  type PageMeta,
 } from "@/lib/api";
+import Pagination from "@/components/Pagination";
 
 type InboxTab = "to" | "cc" | "actions" | "dispositions" | "sent";
-
-interface InboxData {
-  to: IncomingLetter[];
-  cc: IncomingLetter[];
-  approvals: ApprovalInboxItem[];
-  dispositions: DispositionInboxItem[];
-  sent: DraftLetter[];
-}
 
 const TAB_LABEL: Record<InboxTab, string> = {
   to: "Surat Masuk",
@@ -105,79 +99,148 @@ function matchesSearch(value: string, query: string): boolean {
   return value.toLowerCase().includes(query.toLowerCase());
 }
 
-async function fetchInboxData(): Promise<InboxData> {
-  const [toData, ccData, approvalData, dispositionData, sentData] =
-    await Promise.all([
-      listIncomingLetters("to"),
-      listIncomingLetters("cc"),
-      listApprovalInbox(),
-      listDispositionInbox(),
-      listMyLetters(),
-    ]);
-  return {
-    to: toData.letters,
-    cc: ccData.letters,
-    approvals: approvalData.approvals,
-    dispositions: dispositionData.dispositions,
-    sent: sentData.letters,
-  };
-}
-
 export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<InboxTab>("to");
+
   const [toLetters, setToLetters] = useState<IncomingLetter[]>([]);
+  const [toPage, setToPage] = useState(1);
+  const [toMeta, setToMeta] = useState<PageMeta | null>(null);
+  const [toLoaded, setToLoaded] = useState(false);
+
   const [ccLetters, setCcLetters] = useState<IncomingLetter[]>([]);
+  const [ccPage, setCcPage] = useState(1);
+  const [ccMeta, setCcMeta] = useState<PageMeta | null>(null);
+  const [ccLoaded, setCcLoaded] = useState(false);
+
   const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+  const [actionsPage, setActionsPage] = useState(1);
+  const [actionsMeta, setActionsMeta] = useState<PageMeta | null>(null);
+  const [actionsLoaded, setActionsLoaded] = useState(false);
+
   const [dispositions, setDispositions] = useState<DispositionInboxItem[]>([]);
+  const [dispositionsPage, setDispositionsPage] = useState(1);
+  const [dispositionsMeta, setDispositionsMeta] = useState<PageMeta | null>(null);
+  const [dispositionsLoaded, setDispositionsLoaded] = useState(false);
+
   const [sentLetters, setSentLetters] = useState<DraftLetter[]>([]);
+  const [sentPage, setSentPage] = useState(1);
+  const [sentMeta, setSentMeta] = useState<PageMeta | null>(null);
+  const [sentLoaded, setSentLoaded] = useState(false);
+
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyRecipientID, setBusyRecipientID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const applyData = useCallback((data: InboxData) => {
-    setToLetters(data.to);
-    setCcLetters(data.cc);
-    setApprovals(data.approvals);
-    setDispositions(data.dispositions);
-    setSentLetters(data.sent);
+  const pageByTab: Record<InboxTab, number> = {
+    to: toPage,
+    cc: ccPage,
+    actions: actionsPage,
+    dispositions: dispositionsPage,
+    sent: sentPage,
+  };
+  const loadedByTab: Record<InboxTab, boolean> = {
+    to: toLoaded,
+    cc: ccLoaded,
+    actions: actionsLoaded,
+    dispositions: dispositionsLoaded,
+    sent: sentLoaded,
+  };
+
+  const loadTab = useCallback(async (tab: InboxTab, page: number) => {
+    setLoading(true);
+    setError(null);
+    try {
+      switch (tab) {
+        case "to": {
+          const data = await listIncomingLetters("to", { page });
+          setToLetters(data.data);
+          setToMeta(data.meta);
+          setToPage(page);
+          setToLoaded(true);
+          break;
+        }
+        case "cc": {
+          const data = await listIncomingLetters("cc", { page });
+          setCcLetters(data.data);
+          setCcMeta(data.meta);
+          setCcPage(page);
+          setCcLoaded(true);
+          break;
+        }
+        case "actions": {
+          const data = await listApprovalInbox({ page });
+          setApprovals(data.data);
+          setActionsMeta(data.meta);
+          setActionsPage(page);
+          setActionsLoaded(true);
+          break;
+        }
+        case "dispositions": {
+          const data = await listDispositionInbox({ page });
+          setDispositions(data.data);
+          setDispositionsMeta(data.meta);
+          setDispositionsPage(page);
+          setDispositionsLoaded(true);
+          break;
+        }
+        case "sent": {
+          const data = await listMyLetters({ page });
+          setSentLetters(data.data);
+          setSentMeta(data.meta);
+          setSentPage(page);
+          setSentLoaded(true);
+          break;
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal memuat surat masuk");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const reload = useCallback(async () => {
-    setError(null);
-    const data = await fetchInboxData();
-    applyData(data);
-  }, [applyData]);
+  const reload = useCallback(
+    () => loadTab(activeTab, pageByTab[activeTab]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loadTab, activeTab],
+  );
 
   useEffect(() => {
-    let active = true;
-    fetchInboxData()
-      .then((data) => {
-        if (!active) return;
-        applyData(data);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat surat masuk");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [applyData]);
+    queueMicrotask(() => {
+      loadTab("to", 1);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleTabChange(tab: InboxTab) {
+    setActiveTab(tab);
+    if (!loadedByTab[tab]) loadTab(tab, 1);
+  }
 
   const stats = useMemo(
     () => ({
-      to: toLetters.filter((item) => !item.is_read).length,
-      cc: ccLetters.filter((item) => !item.is_read).length,
-      actions: approvals.length,
-      dispositions: dispositions.filter((item) => item.status !== "done").length,
-      sent: sentLetters.length,
+      to: toMeta?.total ?? toLetters.filter((item) => !item.is_read).length,
+      cc: ccMeta?.total ?? ccLetters.filter((item) => !item.is_read).length,
+      actions: actionsMeta?.total ?? approvals.length,
+      dispositions:
+        dispositionsMeta?.total ??
+        dispositions.filter((item) => item.status !== "done").length,
+      sent: sentMeta?.total ?? sentLetters.length,
     }),
-    [approvals.length, ccLetters, dispositions, sentLetters.length, toLetters],
+    [
+      actionsMeta,
+      approvals.length,
+      ccLetters,
+      ccMeta,
+      dispositions,
+      dispositionsMeta,
+      sentLetters.length,
+      sentMeta,
+      toLetters,
+      toMeta,
+    ],
   );
 
   const filteredTo = useMemo(
@@ -296,7 +359,7 @@ export default function InboxPage() {
             return (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => handleTabChange(tab)}
                 className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
                   active
                     ? "border-navy-700 bg-navy-900 text-white dark:border-sky-500 dark:bg-sky-500 dark:text-navy-950"
@@ -317,12 +380,17 @@ export default function InboxPage() {
             );
           })}
         </div>
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Cari surat atau disposisi"
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
-        />
+        <div>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Cari surat atau disposisi"
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+          />
+          <span className="mt-1 block text-[11px] text-zinc-400">
+            Pencarian hanya berlaku pada halaman yang sedang dimuat
+          </span>
+        </div>
       </div>
 
       {success && (
@@ -341,22 +409,64 @@ export default function InboxPage() {
       {loading && <p className="text-sm text-zinc-500">Memuat surat masuk...</p>}
 
       {!loading && activeTab === "to" && (
-        <IncomingList emptyText="Tidak ada surat masuk." letters={filteredTo} />
+        <>
+          <IncomingList emptyText="Tidak ada surat masuk." letters={filteredTo} />
+          <Pagination
+            page={toPage}
+            totalPages={toMeta?.total_pages ?? 1}
+            onPageChange={(page) => loadTab("to", page)}
+            disabled={loading}
+          />
+        </>
       )}
       {!loading && activeTab === "cc" && (
-        <IncomingList emptyText="Tidak ada tembusan." letters={filteredCc} />
+        <>
+          <IncomingList emptyText="Tidak ada tembusan." letters={filteredCc} />
+          <Pagination
+            page={ccPage}
+            totalPages={ccMeta?.total_pages ?? 1}
+            onPageChange={(page) => loadTab("cc", page)}
+            disabled={loading}
+          />
+        </>
       )}
       {!loading && activeTab === "actions" && (
-        <ApprovalList approvals={filteredApprovals} />
+        <>
+          <ApprovalList approvals={filteredApprovals} />
+          <Pagination
+            page={actionsPage}
+            totalPages={actionsMeta?.total_pages ?? 1}
+            onPageChange={(page) => loadTab("actions", page)}
+            disabled={loading}
+          />
+        </>
       )}
       {!loading && activeTab === "dispositions" && (
-        <DispositionList
-          busyRecipientID={busyRecipientID}
-          dispositions={filteredDispositions}
-          onStatusChange={handleDispositionStatus}
-        />
+        <>
+          <DispositionList
+            busyRecipientID={busyRecipientID}
+            dispositions={filteredDispositions}
+            onStatusChange={handleDispositionStatus}
+          />
+          <Pagination
+            page={dispositionsPage}
+            totalPages={dispositionsMeta?.total_pages ?? 1}
+            onPageChange={(page) => loadTab("dispositions", page)}
+            disabled={loading}
+          />
+        </>
       )}
-      {!loading && activeTab === "sent" && <SentList letters={filteredSent} />}
+      {!loading && activeTab === "sent" && (
+        <>
+          <SentList letters={filteredSent} />
+          <Pagination
+            page={sentPage}
+            totalPages={sentMeta?.total_pages ?? 1}
+            onPageChange={(page) => loadTab("sent", page)}
+            disabled={loading}
+          />
+        </>
+      )}
     </main>
   );
 }

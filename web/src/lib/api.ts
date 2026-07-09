@@ -102,6 +102,35 @@ async function parseAPIResponse<T>(
   return data as T;
 }
 
+export interface PageMeta {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+}
+
+export interface Paginated<T> {
+  data: T[];
+  meta: PageMeta;
+}
+
+export interface PageParams {
+  page?: number;
+  pageSize?: number;
+}
+
+function buildQuery(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === "") continue;
+    search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export function clearTokens() {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
@@ -219,9 +248,26 @@ export interface PositionDeactivationImpact {
   can_deactivate: boolean;
 }
 
-export const listPositions = (includeInactive = false) =>
-  apiFetch<{ positions: Position[] }>(
-    `/positions${includeInactive ? "?include_inactive=true" : ""}`,
+export const listPositions = (
+  opts: PageParams & { includeInactive?: boolean; orgUnitId?: string } = {},
+) =>
+  apiFetch<Paginated<Position>>(
+    `/positions${buildQuery({
+      include_inactive: opts.includeInactive || undefined,
+      org_unit_id: opts.orgUnitId,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
+
+// Lookup non-paginasi untuk dropdown/reference (bukan tabel utama halaman).
+export const listAllPositions = (includeInactive = false) =>
+  apiFetch<Paginated<Position>>(
+    `/positions${buildQuery({
+      include_inactive: includeInactive || undefined,
+      page: 1,
+      page_size: 100,
+    })}`,
   );
 
 export const createPosition = (payload: PositionPayload) =>
@@ -279,9 +325,25 @@ export interface Company {
   logo_url?: string;
 }
 
-export const listCompanies = (includeInactive = false) =>
-  apiFetch<{ companies: Company[] }>(
-    `/companies${includeInactive ? "?include_inactive=true" : ""}`,
+export const listCompanies = (
+  opts: PageParams & { includeInactive?: boolean } = {},
+) =>
+  apiFetch<Paginated<Company>>(
+    `/companies${buildQuery({
+      include_inactive: opts.includeInactive || undefined,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
+
+// Lookup non-paginasi untuk dropdown/reference (bukan tabel utama halaman).
+export const listAllCompanies = (includeInactive = false) =>
+  apiFetch<Paginated<Company>>(
+    `/companies${buildQuery({
+      include_inactive: includeInactive || undefined,
+      page: 1,
+      page_size: 100,
+    })}`,
   );
 
 export interface CompanyPayload {
@@ -345,9 +407,25 @@ export interface LetterTypePayload {
   is_active?: boolean;
 }
 
-export const listLetterTypes = (includeInactive = false) =>
-  apiFetch<{ letter_types: LetterType[] }>(
-    `/letter-types${includeInactive ? "?include_inactive=true" : ""}`,
+export const listLetterTypes = (
+  opts: PageParams & { includeInactive?: boolean } = {},
+) =>
+  apiFetch<Paginated<LetterType>>(
+    `/letter-types${buildQuery({
+      include_inactive: opts.includeInactive || undefined,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
+
+// Lookup non-paginasi untuk dropdown/reference (bukan tabel utama halaman).
+export const listAllLetterTypes = (includeInactive = false) =>
+  apiFetch<Paginated<LetterType>>(
+    `/letter-types${buildQuery({
+      include_inactive: includeInactive || undefined,
+      page: 1,
+      page_size: 100,
+    })}`,
   );
 
 export const createLetterType = (payload: LetterTypePayload) =>
@@ -391,9 +469,31 @@ export interface LetterTemplatePayload {
   is_active?: boolean;
 }
 
-export const listLetterTemplates = (includeInactive = false) =>
-  apiFetch<{ letter_templates: LetterTemplate[] }>(
-    `/letter-templates${includeInactive ? "?include_inactive=true" : ""}`,
+export const listLetterTemplates = (
+  opts: PageParams & {
+    includeInactive?: boolean;
+    letterTypeId?: string;
+    companyId?: string;
+  } = {},
+) =>
+  apiFetch<Paginated<LetterTemplate>>(
+    `/letter-templates${buildQuery({
+      include_inactive: opts.includeInactive || undefined,
+      letter_type_id: opts.letterTypeId,
+      company_id: opts.companyId,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
+
+// Lookup non-paginasi untuk dropdown/reference (bukan tabel utama halaman).
+export const listAllLetterTemplates = (includeInactive = false) =>
+  apiFetch<Paginated<LetterTemplate>>(
+    `/letter-templates${buildQuery({
+      include_inactive: includeInactive || undefined,
+      page: 1,
+      page_size: 100,
+    })}`,
   );
 
 export const createLetterTemplate = (payload: LetterTemplatePayload) =>
@@ -459,9 +559,15 @@ export interface ApprovalMatrixPayload {
   is_active?: boolean;
 }
 
-export const listApprovalMatrices = (includeInactive = false) =>
-  apiFetch<{ approval_matrices: ApprovalMatrix[] }>(
-    `/approval-matrices${includeInactive ? "?include_inactive=true" : ""}`,
+export const listApprovalMatrices = (
+  opts: PageParams & { includeInactive?: boolean } = {},
+) =>
+  apiFetch<Paginated<ApprovalMatrix>>(
+    `/approval-matrices${buildQuery({
+      include_inactive: opts.includeInactive || undefined,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
   );
 
 export const createApprovalMatrix = (payload: ApprovalMatrixPayload) =>
@@ -536,7 +642,13 @@ export interface DraftLetterPayload {
 export const listDraftLetters = () =>
   apiFetch<{ letters: DraftLetter[] }>("/letters/drafts");
 
-export const listMyLetters = () => apiFetch<{ letters: DraftLetter[] }>("/letters/mine");
+export const listMyLetters = (opts: PageParams = {}) =>
+  apiFetch<Paginated<DraftLetter>>(
+    `/letters/mine${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
 
 export const getDraftLetter = (id: string) =>
   apiFetch<{ letter: DraftLetter }>(`/letters/drafts/${id}`);
@@ -637,9 +749,16 @@ export interface IncomingLetter {
   updated_at: string;
 }
 
-export const listIncomingLetters = (box?: "to" | "cc") =>
-  apiFetch<{ letters: IncomingLetter[] }>(
-    `/letters/inbox${box ? `?box=${box}` : ""}`,
+export const listIncomingLetters = (
+  box?: "to" | "cc",
+  opts: PageParams = {},
+) =>
+  apiFetch<Paginated<IncomingLetter>>(
+    `/letters/inbox${buildQuery({
+      box,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
   );
 
 // ---- Approval surat ----
@@ -674,8 +793,13 @@ export interface ApprovalActionResult {
   status: DraftLetter["status"];
 }
 
-export const listApprovalInbox = () =>
-  apiFetch<{ approvals: ApprovalInboxItem[] }>("/approvals/inbox");
+export const listApprovalInbox = (opts: PageParams = {}) =>
+  apiFetch<Paginated<ApprovalInboxItem>>(
+    `/approvals/inbox${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
 
 export const actApprovalStep = (stepID: string, payload: ApprovalActionPayload) =>
   apiFetch<ApprovalActionResult>(`/approvals/steps/${stepID}/actions`, {
@@ -740,9 +864,15 @@ export interface UpdateDispositionStatusPayload {
   followup_note?: string;
 }
 
-export const listLetterDispositions = (letterID: string) =>
-  apiFetch<{ dispositions: DispositionItem[] }>(
-    `/letters/view/${letterID}/dispositions`,
+export const listLetterDispositions = (
+  letterID: string,
+  opts: PageParams = {},
+) =>
+  apiFetch<Paginated<DispositionItem>>(
+    `/letters/view/${letterID}/dispositions${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
   );
 
 export const createDisposition = (
@@ -754,8 +884,13 @@ export const createDisposition = (
     body: JSON.stringify(payload),
   });
 
-export const listDispositionInbox = () =>
-  apiFetch<{ dispositions: DispositionInboxItem[] }>("/dispositions/inbox");
+export const listDispositionInbox = (opts: PageParams = {}) =>
+  apiFetch<Paginated<DispositionInboxItem>>(
+    `/dispositions/inbox${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
 
 export const updateDispositionStatus = (
   recipientID: string,
@@ -936,7 +1071,7 @@ export interface AppNotification {
 }
 
 export const listNotifications = (limit = 15) =>
-  apiFetch<{ notifications: AppNotification[]; unread_count: number }>(
+  apiFetch<Paginated<AppNotification> & { unread_count: number }>(
     `/notifications?limit=${limit}`,
   );
 
@@ -1048,7 +1183,13 @@ export interface ImportResult {
   errors: { row: number; error: string }[];
 }
 
-export const listUsers = () => apiFetch<{ users: UserRow[] }>("/users");
+export const listUsers = (opts: PageParams = {}) =>
+  apiFetch<Paginated<UserRow>>(
+    `/users${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
 
 export const createUser = (payload: UserPayload) =>
   apiFetch<{ id: string }>("/users", {

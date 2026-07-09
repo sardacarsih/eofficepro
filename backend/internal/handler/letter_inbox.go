@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ func (h *Handler) ListIncomingLetters(c *gin.Context) {
 		return
 	}
 
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
 	filterSQL := ""
 	args := []any{userID}
 	if box != "" {
@@ -48,43 +55,53 @@ func (h *Handler) ListIncomingLetters(c *gin.Context) {
 		filterSQL = "AND lr.recipient_type = $2"
 	}
 
-	rows, err := h.DB.Query(c.Request.Context(), `
+	inboxCTE := `
+		SELECT DISTINCT ON (l.id, lr.recipient_type)
+		       l.id::text AS id, lr.recipient_type, co.code, lt.code, l.letter_number,
+		       l.subject, l.classification, l.priority,
+		       u.full_name, cp.title, COALESCE(v.body_plain, ''),
+		       COALESCE(a.attachment_count, 0),
+		       rr.first_read_at IS NOT NULL AS is_read,
+		       rr.first_read_at, rr.last_read_at,
+		       lr.delivered_at, l.published_at, l.updated_at
+		FROM letter_recipients lr
+		JOIN letters l ON l.id = lr.letter_id
+		JOIN companies co ON co.id = l.company_id
+		JOIN letter_types lt ON lt.id = l.letter_type_id
+		JOIN users u ON u.id = l.creator_user_id
+		JOIN positions cp ON cp.id = l.creator_position_id
+		LEFT JOIN read_receipts rr ON rr.letter_id = l.id AND rr.user_id = $1
+		LEFT JOIN LATERAL (
+			SELECT body_plain
+			FROM letter_versions
+			WHERE letter_id = l.id
+			ORDER BY version DESC
+			LIMIT 1
+		) v ON true
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS attachment_count
+			FROM letter_attachments
+			WHERE letter_id = l.id
+		) a ON true
+		WHERE l.status = 'published'
+		  ` + filterSQL + `
+		  AND ` + recipientAccessSQL("$1") + `
+		ORDER BY l.id, lr.recipient_type, l.published_at DESC NULLS LAST, l.updated_at DESC`
+
+	ctx := c.Request.Context()
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM (`+inboxCTE+`) inbox`, args...).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung surat masuk"})
+		return
+	}
+
+	limitArgs := append(append([]any{}, args...), pageSize, offset)
+	rows, err := h.DB.Query(ctx, `
 		SELECT *
-		FROM (
-			SELECT DISTINCT ON (l.id, lr.recipient_type)
-			       l.id::text AS id, lr.recipient_type, co.code, lt.code, l.letter_number,
-			       l.subject, l.classification, l.priority,
-			       u.full_name, cp.title, COALESCE(v.body_plain, ''),
-			       COALESCE(a.attachment_count, 0),
-			       rr.first_read_at IS NOT NULL AS is_read,
-			       rr.first_read_at, rr.last_read_at,
-			       lr.delivered_at, l.published_at, l.updated_at
-			FROM letter_recipients lr
-			JOIN letters l ON l.id = lr.letter_id
-			JOIN companies co ON co.id = l.company_id
-			JOIN letter_types lt ON lt.id = l.letter_type_id
-			JOIN users u ON u.id = l.creator_user_id
-			JOIN positions cp ON cp.id = l.creator_position_id
-			LEFT JOIN read_receipts rr ON rr.letter_id = l.id AND rr.user_id = $1
-			LEFT JOIN LATERAL (
-				SELECT body_plain
-				FROM letter_versions
-				WHERE letter_id = l.id
-				ORDER BY version DESC
-				LIMIT 1
-			) v ON true
-			LEFT JOIN LATERAL (
-				SELECT count(*) AS attachment_count
-				FROM letter_attachments
-				WHERE letter_id = l.id
-			) a ON true
-			WHERE l.status = 'published'
-			  `+filterSQL+`
-			  AND `+recipientAccessSQL("$1")+`
-			ORDER BY l.id, lr.recipient_type, l.published_at DESC NULLS LAST, l.updated_at DESC
-		) inbox
-		ORDER BY published_at DESC NULLS LAST, updated_at DESC`,
-		args...)
+		FROM (`+inboxCTE+`) inbox
+		ORDER BY published_at DESC NULLS LAST, updated_at DESC
+		LIMIT $`+strconv.Itoa(len(args)+1)+` OFFSET $`+strconv.Itoa(len(args)+2),
+		limitArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat surat masuk"})
 		return
@@ -124,7 +141,7 @@ func (h *Handler) ListIncomingLetters(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"letters": letters})
+	c.JSON(http.StatusOK, gin.H{"data": letters, "meta": newPageMeta(page, pageSize, total)})
 }
 
 func (h *Handler) userCanReceivePublishedLetter(ctx context.Context, userID string, letterID string) (bool, error) {

@@ -7,8 +7,10 @@ import {
   listApprovalInbox,
   type ApprovalActionPayload,
   type ApprovalInboxItem,
+  type PageMeta,
 } from "@/lib/api";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+import Pagination from "@/components/Pagination";
 
 const PRIORITY_LABEL: Record<ApprovalInboxItem["priority"], string> = {
   normal: "Normal",
@@ -59,6 +61,8 @@ function bodyExcerpt(value: string): string {
 export default function ApprovalsPage() {
   const me = useCurrentUser();
   const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busyStepID, setBusyStepID] = useState<string | null>(null);
@@ -66,18 +70,23 @@ export default function ApprovalsPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   async function reloadApprovals() {
-    const data = await listApprovalInbox();
-    setApprovals(data.approvals);
+    const data = await listApprovalInbox({ page });
+    setApprovals(data.data);
+    setMeta(data.meta);
   }
 
   useEffect(() => {
-    listApprovalInbox()
-      .then((data) => setApprovals(data.approvals))
+    queueMicrotask(() => setLoading(true));
+    listApprovalInbox({ page })
+      .then((data) => {
+        setApprovals(data.data);
+        setMeta(data.meta);
+      })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat approval"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   const canApprove = useMemo(
     () => me?.roles.some((role) => ["admin", "approver"].includes(role)) ?? false,
@@ -126,7 +135,7 @@ export default function ApprovalsPage() {
               Inbox Approval
             </h1>
             <p className="text-sm text-zinc-500">
-              {approvals.length} surat menunggu keputusan
+              {meta?.total ?? approvals.length} surat menunggu keputusan
             </p>
           </div>
           <button
@@ -271,6 +280,12 @@ export default function ApprovalsPage() {
             );
           })}
         </div>
+        <Pagination
+          page={page}
+          totalPages={meta?.total_pages ?? 1}
+          onPageChange={setPage}
+          disabled={loading}
+        />
     </main>
   );
 }

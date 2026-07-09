@@ -9,19 +9,21 @@ import {
   getOrgTree,
   getUserDeactivationImpact,
   importUsers,
-  listPositions,
+  listAllPositions,
   listUsers,
   updateUser,
   type DeactivateUserPayload,
   type DeactivationImpact,
   type ImportResult,
   type OrgUnit,
+  type PageMeta,
   type Position,
   type UserPayload,
   type UserPositionAssignment,
   type UserPositionPayload,
   type UserRow,
 } from "@/lib/api";
+import Pagination from "@/components/Pagination";
 import {
   POSITION_TYPE_LABEL,
   USER_POSITION_TYPES_BY_UNIT_LEVEL,
@@ -289,6 +291,8 @@ export default function UsersPage() {
   const lastFocusedRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnit[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -306,12 +310,13 @@ export default function UsersPage() {
 
   async function reload() {
     const [userData, positionData, orgData] = await Promise.all([
-      listUsers(),
-      listPositions(),
+      listUsers({ page }),
+      listAllPositions(),
       getOrgTree(),
     ]);
-    setUsers(userData.users);
-    setPositions(positionData.positions);
+    setUsers(userData.data);
+    setMeta(userData.meta);
+    setPositions(positionData.data);
     setOrgUnits(flattenOrgUnits(orgData.tree));
   }
 
@@ -322,17 +327,19 @@ export default function UsersPage() {
   }, [me, router]);
 
   useEffect(() => {
-    Promise.all([listUsers(), listPositions(), getOrgTree()])
+    setLoading(true);
+    Promise.all([listUsers({ page }), listAllPositions(), getOrgTree()])
       .then(([userData, positionData, orgData]) => {
-        setUsers(userData.users);
-        setPositions(positionData.positions);
+        setUsers(userData.data);
+        setMeta(userData.meta);
+        setPositions(positionData.data);
         setOrgUnits(flattenOrgUnits(orgData.tree));
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat pengguna"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     const activeContainer = modalOpen
@@ -864,7 +871,7 @@ export default function UsersPage() {
                   Daftar Pengguna
                 </p>
                 <p className="text-xs text-zinc-500">
-                  {activeCount} aktif dari {users.length} akun
+                  {activeCount} aktif pada halaman ini dari {meta?.total ?? users.length} total pengguna
                 </p>
               </div>
               <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
@@ -1019,6 +1026,14 @@ export default function UsersPage() {
               </tbody>
             </table>
           </div>
+          <div className="px-4">
+            <Pagination
+              page={page}
+              totalPages={meta?.total_pages ?? 1}
+              onPageChange={setPage}
+              disabled={loading}
+            />
+          </div>
         </section>
 
         <section className="grid gap-3 lg:hidden">
@@ -1149,6 +1164,12 @@ export default function UsersPage() {
                 </article>
               );
             })}
+          <Pagination
+            page={page}
+            totalPages={meta?.total_pages ?? 1}
+            onPageChange={setPage}
+            disabled={loading}
+          />
         </section>
       </main>
 

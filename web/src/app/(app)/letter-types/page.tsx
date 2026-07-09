@@ -9,8 +9,10 @@ import {
   updateLetterType,
   type LetterType,
   type LetterTypePayload,
+  type PageMeta,
 } from "@/lib/api";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+import Pagination from "@/components/Pagination";
 
 const CLASSIFICATION_LABEL: Record<LetterType["default_classification"], string> = {
   biasa: "Biasa",
@@ -66,6 +68,8 @@ export default function LetterTypesPage() {
   const router = useRouter();
   const me = useCurrentUser();
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,8 +80,9 @@ export default function LetterTypesPage() {
   const modalOpen = editing !== null || form !== null;
 
   async function reload() {
-    const data = await listLetterTypes(true);
-    setLetterTypes(data.letter_types);
+    const data = await listLetterTypes({ includeInactive: true, page });
+    setLetterTypes(data.data);
+    setMeta(data.meta);
   }
 
   // Halaman khusus admin — alihkan role lain setelah profil termuat.
@@ -88,13 +93,17 @@ export default function LetterTypesPage() {
   }, [me, router]);
 
   useEffect(() => {
-    listLetterTypes(true)
-      .then((data) => setLetterTypes(data.letter_types))
+    queueMicrotask(() => setLoading(true));
+    listLetterTypes({ includeInactive: true, page })
+      .then((data) => {
+        setLetterTypes(data.data);
+        setMeta(data.meta);
+      })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat jenis surat"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   const activeCount = useMemo(
     () => letterTypes.filter((item) => item.is_active).length,
@@ -306,6 +315,14 @@ export default function LetterTypesPage() {
                   })}
               </tbody>
             </table>
+          </div>
+          <div className="px-4">
+            <Pagination
+              page={page}
+              totalPages={meta?.total_pages ?? 1}
+              onPageChange={setPage}
+              disabled={loading}
+            />
           </div>
         </div>
       </main>

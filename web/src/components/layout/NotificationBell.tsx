@@ -34,7 +34,7 @@ export default function NotificationBell() {
   const refresh = useCallback(() => {
     listNotifications()
       .then((data) => {
-        setItems(data.notifications);
+        setItems(data.data);
         setUnreadCount(data.unread_count);
       })
       .catch(() => {

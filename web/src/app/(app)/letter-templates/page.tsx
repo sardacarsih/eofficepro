@@ -6,16 +6,18 @@ import {
   activateLetterTemplate,
   createLetterTemplate,
   deactivateLetterTemplate,
-  listCompanies,
+  listAllCompanies,
+  listAllLetterTypes,
   listLetterTemplates,
-  listLetterTypes,
   updateLetterTemplate,
   type Company,
   type LetterTemplate,
   type LetterTemplatePayload,
   type LetterType,
+  type PageMeta,
 } from "@/lib/api";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+import Pagination from "@/components/Pagination";
 
 const DEFAULT_LAYOUT = {
   page: { size: "A4", margin_mm: { top: 24, right: 22, bottom: 22, left: 22 } },
@@ -89,6 +91,8 @@ export default function LetterTemplatesPage() {
   const router = useRouter();
   const me = useCurrentUser();
   const [templates, setTemplates] = useState<LetterTemplate[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -101,8 +105,9 @@ export default function LetterTemplatesPage() {
   const modalOpen = editing !== null || form !== null;
 
   async function reload() {
-    const data = await listLetterTemplates(true);
-    setTemplates(data.letter_templates);
+    const data = await listLetterTemplates({ includeInactive: true, page });
+    setTemplates(data.data);
+    setMeta(data.meta);
   }
 
   // Halaman khusus admin — alihkan role lain setelah profil termuat.
@@ -113,21 +118,23 @@ export default function LetterTemplatesPage() {
   }, [me, router]);
 
   useEffect(() => {
+    queueMicrotask(() => setLoading(true));
     Promise.all([
-      listLetterTemplates(true),
-      listLetterTypes(false),
-      listCompanies(),
+      listLetterTemplates({ includeInactive: true, page }),
+      listAllLetterTypes(false),
+      listAllCompanies(),
     ])
       .then(([templateData, typeData, companyData]) => {
-        setTemplates(templateData.letter_templates);
-        setLetterTypes(typeData.letter_types);
-        setCompanies(companyData.companies);
+        setTemplates(templateData.data);
+        setMeta(templateData.meta);
+        setLetterTypes(typeData.data);
+        setCompanies(companyData.data);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat template surat"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   const activeCount = useMemo(
     () => templates.filter((template) => template.is_active).length,
@@ -340,6 +347,14 @@ export default function LetterTemplatesPage() {
                   })}
               </tbody>
             </table>
+          </div>
+          <div className="px-4">
+            <Pagination
+              page={page}
+              totalPages={meta?.total_pages ?? 1}
+              onPageChange={setPage}
+              disabled={loading}
+            />
           </div>
         </div>
       </main>

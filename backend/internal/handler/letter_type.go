@@ -20,15 +20,29 @@ type LetterType struct {
 
 func (h *Handler) ListLetterTypes(c *gin.Context) {
 	includeInactive := c.Query("include_inactive") == "true"
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
+	whereSQL := ""
+	if !includeInactive {
+		whereSQL = ` WHERE is_active`
+	}
+
+	ctx := c.Request.Context()
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM letter_types`+whereSQL).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung jenis surat"})
+		return
+	}
+
 	query := `
 		SELECT id::text, code, name, default_classification, default_sla_hours, is_active
-		FROM letter_types`
-	if !includeInactive {
-		query += ` WHERE is_active`
-	}
-	query += ` ORDER BY code`
+		FROM letter_types` + whereSQL + ` ORDER BY code LIMIT $1 OFFSET $2`
 
-	rows, err := h.DB.Query(c.Request.Context(), query)
+	rows, err := h.DB.Query(ctx, query, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat jenis surat"})
 		return
@@ -49,7 +63,7 @@ func (h *Handler) ListLetterTypes(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"letter_types": letterTypes})
+	c.JSON(http.StatusOK, gin.H{"data": letterTypes, "meta": newPageMeta(page, pageSize, total)})
 }
 
 type letterTypeRequest struct {

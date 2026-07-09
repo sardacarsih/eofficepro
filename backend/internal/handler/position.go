@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,31 @@ func (h *Handler) ListPositions(c *gin.Context) {
 	orgUnitID := c.Query("org_unit_id")
 	includeInactive := c.Query("include_inactive") == "true"
 	ctx := c.Request.Context()
+
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
+	whereSQL := " WHERE true"
+	args := []any{}
+	if !includeInactive {
+		whereSQL += ` AND p.is_active`
+	}
+	if orgUnitID != "" {
+		args = append(args, orgUnitID)
+		whereSQL += ` AND p.org_unit_id = $` + strconv.Itoa(len(args))
+	}
+
+	var total int64
+	if err := h.DB.QueryRow(ctx, `
+		SELECT count(*)
+		FROM positions p
+		JOIN org_units ou ON ou.id = p.org_unit_id`+whereSQL, args...).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung jabatan"})
+		return
+	}
 
 	query := `
 		SELECT p.id::text, p.title, p.position_type, p.is_approver,
@@ -62,19 +88,13 @@ func (h *Handler) ListPositions(c *gin.Context) {
 			WHERE up.position_id = p.id
 			  AND current_date >= up.valid_from
 			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
-		) holder ON true
-		WHERE true`
-	args := []any{}
-	if !includeInactive {
-		query += ` AND p.is_active`
-	}
-	if orgUnitID != "" {
-		query += ` AND p.org_unit_id = $1`
-		args = append(args, orgUnitID)
-	}
-	query += ` ORDER BY p.is_active DESC, ou.name, p.title`
+		) holder ON true` +
+		whereSQL +
+		` ORDER BY p.is_active DESC, ou.name, p.title
+		LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
 
-	rows, err := h.DB.Query(ctx, query, args...)
+	limitArgs := append(append([]any{}, args...), pageSize, offset)
+	rows, err := h.DB.Query(ctx, query, limitArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat jabatan"})
 		return
@@ -97,7 +117,7 @@ func (h *Handler) ListPositions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca daftar jabatan"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"positions": positions})
+	c.JSON(http.StatusOK, gin.H{"data": positions, "meta": newPageMeta(page, pageSize, total)})
 }
 
 type positionRequest struct {

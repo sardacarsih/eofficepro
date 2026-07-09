@@ -7,13 +7,13 @@ import {
   createDraftLetter,
   deleteDraftAttachment,
   getOrgTree,
-  listCompanies,
+  listAllCompanies,
   listDraftAttachments,
   listDraftLetters,
-  listLetterTemplates,
-  listLetterTypes,
+  listAllLetterTemplates,
+  listAllLetterTypes,
   listMyLetters,
-  listPositions,
+  listAllPositions,
   previewDraftLetter,
   submitDraftLetter,
   updateDraftLetter,
@@ -272,8 +272,8 @@ export default function ComposePage() {
   }, []);
 
   const reloadMyLetters = useCallback(async () => {
-    const data = await listMyLetters();
-    setMyLetters(data.letters);
+    const data = await listMyLetters({ pageSize: 50 });
+    setMyLetters(data.data);
   }, []);
 
   const reloadAttachments = useCallback(async (draftID: string) => {
@@ -286,13 +286,13 @@ export default function ComposePage() {
     if (!me) return;
 
     Promise.all([
-      listCompanies(),
-      listPositions(),
+      listAllCompanies(),
+      listAllPositions(),
       getOrgTree(),
-      listLetterTypes(false),
-      listLetterTemplates(false),
+      listAllLetterTypes(false),
+      listAllLetterTemplates(false),
       listDraftLetters(),
-      listMyLetters(),
+      listMyLetters({ pageSize: 50 }),
     ])
       .then(
         ([
@@ -304,22 +304,22 @@ export default function ComposePage() {
           draftData,
           myLetterData,
         ]) => {
-        setCompanies(companyData.companies);
-        setRecipientPositions(positionData.positions);
+        setCompanies(companyData.data);
+        setRecipientPositions(positionData.data);
         setRecipientOrgUnits(flattenOrgUnits(orgData.tree));
-        setLetterTypes(typeData.letter_types);
-        setTemplates(templateData.letter_templates);
+        setLetterTypes(typeData.data);
+        setTemplates(templateData.data);
         setDrafts(draftData.letters);
-        setMyLetters(myLetterData.letters);
+        setMyLetters(myLetterData.data);
         setForm(
           emptyForm(
-            companyData.companies,
-            typeData.letter_types,
+            companyData.data,
+            typeData.data,
             me,
-            positionData.positions,
+            positionData.data,
           ),
         );
-        setRecipientTargetID(positionData.positions[0]?.id ?? "");
+        setRecipientTargetID(positionData.data[0]?.id ?? "");
         },
       )
       .catch((err) =>

@@ -15,7 +15,20 @@ import (
 )
 
 func (h *Handler) ListUsers(c *gin.Context) {
-	rows, err := h.DB.Query(c.Request.Context(), `
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung pengguna"})
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
 		SELECT u.id::text, u.nik, u.email, u.full_name, u.status,
 		       COALESCE(user_roles.roles, '{}'::text[]),
 		       COALESCE(user_positions.positions, '[]'::jsonb)
@@ -48,7 +61,8 @@ func (h *Handler) ListUsers(c *gin.Context) {
 			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 			  AND p.is_active
 		) user_positions ON true
-		ORDER BY u.full_name`)
+		ORDER BY u.full_name
+		LIMIT $1 OFFSET $2`, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat pengguna"})
 		return
@@ -78,7 +92,11 @@ func (h *Handler) ListUsers(c *gin.Context) {
 		}
 		users = append(users, u)
 	}
-	c.JSON(http.StatusOK, gin.H{"users": users})
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca data pengguna"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": users, "meta": newPageMeta(page, pageSize, total)})
 }
 
 type userPositionAssignment struct {
