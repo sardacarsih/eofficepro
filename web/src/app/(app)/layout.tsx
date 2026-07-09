@@ -12,6 +12,7 @@ const PAGE_TITLES: { prefix: string; title: string }[] = [
   { prefix: "/compose", title: "Tulis Surat" },
   { prefix: "/approvals", title: "Approval" },
   { prefix: "/organization", title: "Organisasi" },
+  { prefix: "/companies", title: "Perusahaan" },
   { prefix: "/users", title: "Pengguna" },
   { prefix: "/letter-types", title: "Jenis Surat" },
   { prefix: "/letter-templates", title: "Template Surat" },

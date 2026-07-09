@@ -49,6 +49,16 @@ function apiError(data: unknown): string | null {
   return typeof error === "string" ? error : null;
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function parseAPIResponse<T>(
   res: Response,
   fallbackMessage: string,
@@ -57,7 +67,9 @@ async function parseAPIResponse<T>(
   const snippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
 
   if (!text) {
-    if (!res.ok) throw new Error(`${fallbackMessage} (${res.status})`);
+    if (!res.ok) {
+      throw new ApiError(`${fallbackMessage} (${res.status})`, res.status);
+    }
     return {} as T;
   }
 
@@ -66,20 +78,27 @@ async function parseAPIResponse<T>(
     data = JSON.parse(text);
   } catch {
     if (!res.ok) {
-      throw new Error(
+      throw new ApiError(
         snippet
           ? `${fallbackMessage} (${res.status}): ${snippet}`
           : `${fallbackMessage} (${res.status})`,
+        res.status,
       );
     }
-    throw new Error(
+    throw new ApiError(
       snippet
         ? `Respons API tidak valid (${res.status}): ${snippet}`
         : `Respons API tidak valid (${res.status})`,
+      res.status,
     );
   }
 
-  if (!res.ok) throw new Error(apiError(data) ?? `${fallbackMessage} (${res.status})`);
+  if (!res.ok) {
+    throw new ApiError(
+      apiError(data) ?? `${fallbackMessage} (${res.status})`,
+      res.status,
+    );
+  }
   return data as T;
 }
 
@@ -156,7 +175,7 @@ export async function apiFetch<T>(
   if (res.status === 401) {
     clearTokens();
     if (typeof window !== "undefined") window.location.href = "/login";
-    throw new Error("Sesi berakhir, silakan login ulang");
+    throw new ApiError("Sesi berakhir, silakan login ulang", res.status);
   }
 
   return parseAPIResponse<T>(res, "Permintaan gagal");
@@ -249,9 +268,63 @@ export interface Company {
   code: string;
   name: string;
   is_active: boolean;
+  has_logo: boolean;
+  logo?: {
+    mime_type: "image/png" | "image/jpeg";
+    file_name: string;
+    checksum_sha256: string;
+    width: number;
+    height: number;
+  };
+  logo_url?: string;
 }
 
-export const listCompanies = () => apiFetch<{ companies: Company[] }>("/companies");
+export const listCompanies = (includeInactive = false) =>
+  apiFetch<{ companies: Company[] }>(
+    `/companies${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export interface CompanyPayload {
+  code: string;
+  name: string;
+  is_active?: boolean;
+}
+
+export const createCompany = (payload: CompanyPayload) =>
+  apiFetch<{ id: string }>("/companies", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateCompany = (companyID: string, payload: CompanyPayload) =>
+  apiFetch<{ id: string }>(`/companies/${companyID}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deactivateCompany = (companyID: string) =>
+  apiFetch<{ id: string }>(`/companies/${companyID}`, {
+    method: "DELETE",
+  });
+
+export async function uploadCompanyLogo(
+  companyID: string,
+  file: File,
+): Promise<{ id: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/companies/${companyID}/logo`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
+    body: form,
+  });
+  return parseAPIResponse<{ id: string }>(res, "Upload logo perusahaan gagal");
+}
+
+export const deleteCompanyLogo = (companyID: string) =>
+  apiFetch<{ id: string }>(`/companies/${companyID}/logo`, {
+    method: "DELETE",
+  });
 
 // ---- Master jenis surat ----
 
@@ -340,6 +413,71 @@ export const activateLetterTemplate = (id: string) =>
 
 export const deactivateLetterTemplate = (id: string) =>
   apiFetch<{ id: string }>(`/letter-templates/${id}`, { method: "DELETE" });
+
+// ---- Matrix approval ----
+
+export type ApprovalMatrixPositionLevel =
+  | "president_director"
+  | "vp_director"
+  | "director"
+  | "gm"
+  | "dept_head"
+  | "sub_dept_head"
+  | "division_head"
+  | "assistant"
+  | "secretary"
+  | "staff"
+  | "auditor";
+
+export type ApprovalMatrixFinalLevel =
+  | "president_director"
+  | "vp_director"
+  | "director"
+  | "gm"
+  | "dept_head"
+  | "sub_dept_head"
+  | "division_head";
+
+export interface ApprovalMatrix {
+  id: string;
+  letter_type_id: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  originator_level: ApprovalMatrixPositionLevel | null;
+  final_level: ApprovalMatrixFinalLevel;
+  flow_mode: "serial";
+  is_active: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface ApprovalMatrixPayload {
+  letter_type_id: string;
+  originator_level?: ApprovalMatrixPositionLevel | null;
+  final_level: ApprovalMatrixFinalLevel;
+  flow_mode?: "serial";
+  is_active?: boolean;
+}
+
+export const listApprovalMatrices = (includeInactive = false) =>
+  apiFetch<{ approval_matrices: ApprovalMatrix[] }>(
+    `/approval-matrices${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export const createApprovalMatrix = (payload: ApprovalMatrixPayload) =>
+  apiFetch<{ id: string }>("/approval-matrices", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateApprovalMatrix = (id: string, payload: ApprovalMatrixPayload) =>
+  apiFetch<{ id: string }>(`/approval-matrices/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deactivateApprovalMatrix = (id: string) =>
+  apiFetch<{ id: string }>(`/approval-matrices/${id}`, { method: "DELETE" });
 
 // ---- Draft surat ----
 
@@ -436,6 +574,7 @@ export interface DraftPreviewResult {
 export interface SubmitDraftResult {
   id: string;
   status: "in_approval";
+  approval_cycle: number;
   qr_token: string;
   verify_url: string;
   approval_steps: {
@@ -544,10 +683,97 @@ export const actApprovalStep = (stepID: string, payload: ApprovalActionPayload) 
     body: JSON.stringify(payload),
   });
 
+// ---- Disposisi ----
+
+export type DispositionStatus = "open" | "in_progress" | "done";
+
+export interface DispositionRecipient {
+  id: string;
+  position_id: string;
+  position_title: string;
+  holder_name: string;
+  status: DispositionStatus;
+  followup_note: string | null;
+  completed_at: string | null;
+}
+
+export interface DispositionItem {
+  id: string;
+  letter_id: string;
+  parent_disposition_id: string | null;
+  from_position_id: string;
+  from_position_title: string;
+  creator_name: string;
+  instruction: string;
+  due_date: string | null;
+  created_at: string;
+  recipients: DispositionRecipient[];
+}
+
+export interface DispositionInboxItem {
+  recipient_id: string;
+  disposition_id: string;
+  letter_id: string;
+  letter_subject: string;
+  letter_number: string | null;
+  from_position_title: string;
+  creator_name: string;
+  my_position_title: string;
+  instruction: string;
+  due_date: string | null;
+  status: DispositionStatus;
+  followup_note: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface CreateDispositionPayload {
+  from_position_id: string;
+  instruction: string;
+  due_date?: string | null;
+  parent_disposition_id?: string | null;
+  recipient_position_ids: string[];
+}
+
+export interface UpdateDispositionStatusPayload {
+  status: "in_progress" | "done";
+  followup_note?: string;
+}
+
+export const listLetterDispositions = (letterID: string) =>
+  apiFetch<{ dispositions: DispositionItem[] }>(
+    `/letters/view/${letterID}/dispositions`,
+  );
+
+export const createDisposition = (
+  letterID: string,
+  payload: CreateDispositionPayload,
+) =>
+  apiFetch<{ id: string }>(`/letters/view/${letterID}/dispositions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const listDispositionInbox = () =>
+  apiFetch<{ dispositions: DispositionInboxItem[] }>("/dispositions/inbox");
+
+export const updateDispositionStatus = (
+  recipientID: string,
+  payload: UpdateDispositionStatusPayload,
+) =>
+  apiFetch<{ id: string; status: DispositionStatus }>(
+    `/dispositions/recipients/${recipientID}/status`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+
 // ---- Detail surat ----
 
 export interface LetterApprovalStep {
   id: string;
+  approval_cycle: number;
   step_order: number;
   flow_group: number;
   status: "pending" | "waiting" | "approved" | "rejected" | "skipped";

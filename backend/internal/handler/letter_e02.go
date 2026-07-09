@@ -9,6 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"io"
 	"mime"
 	"net/http"
@@ -18,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/qr"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/jung-kurt/gofpdf"
@@ -27,8 +33,11 @@ import (
 )
 
 const (
-	maxDraftAttachmentSize = 25 * 1024 * 1024
-	presignedURLTTL        = 15 * time.Minute
+	maxDraftAttachmentSize              = 25 * 1024 * 1024
+	presignedURLTTL                     = 15 * time.Minute
+	verificationQRCodeImageSize         = 512
+	verificationQRCodeQuietZoneModules  = 4
+	verificationQRCodePDFSizeMillimeter = 28.0
 )
 
 var allowedAttachmentMIMETypes = map[string]bool{
@@ -57,6 +66,8 @@ type draftPreviewData struct {
 	ID                   string
 	CompanyCode          string
 	CompanyName          string
+	CompanyLogoKey       string
+	CompanyLogoMIMEType  string
 	LetterTypeCode       string
 	LetterTypeName       string
 	LetterNumber         string
@@ -247,7 +258,13 @@ func (h *Handler) PreviewDraftLetter(c *gin.Context) {
 		return
 	}
 
-	pdfBytes, err := renderLetterPreviewPDF(data, recipients)
+	companyLogo, err := h.loadCompanyLogo(ctx, data.CompanyLogoKey, data.CompanyLogoMIMEType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat logo perusahaan"})
+		return
+	}
+
+	pdfBytes, err := renderLetterPreviewPDF(data, recipients, companyLogo)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membuat preview PDF"})
 		return
@@ -332,23 +349,10 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		return
 	}
 
-	if _, err := tx.Exec(ctx, `DELETE FROM approval_steps WHERE letter_id = $1`, letterID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyiapkan rute approval"})
+	approvalCycle, err := insertApprovalRoute(ctx, tx, letterID, route)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan rute approval"})
 		return
-	}
-	for _, step := range route.Steps {
-		status := "pending"
-		if step.StepOrder == 1 {
-			status = "waiting"
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO approval_steps
-				(letter_id, step_order, approver_position_id, flow_group, status, sla_deadline)
-			VALUES ($1, $2, $3, $4, $5, now() + make_interval(hours => $6::int))`,
-			letterID, step.StepOrder, step.PositionID, step.FlowGroup, status, route.SLAHours); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan rute approval"})
-			return
-		}
 	}
 
 	approverEmails, err := notifyWaitingApprovers(ctx, tx, letterID)
@@ -382,12 +386,14 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 
 	h.audit(ctx, "letter", &letterID, "submit", &userID, map[string]any{
 		"approval_steps": len(route.Steps),
+		"approval_cycle": approvalCycle,
 		"qr_token":       qrToken,
 	}, c.ClientIP())
 	h.sendNotificationEmails(approverEmails)
 	c.JSON(http.StatusOK, gin.H{
 		"id":             letterID,
 		"status":         "in_approval",
+		"approval_cycle": approvalCycle,
 		"qr_token":       qrToken,
 		"verify_url":     h.verifyURL(qrToken),
 		"approval_steps": route.Steps,
@@ -513,7 +519,10 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 		statusSQL = "AND l.status IN ('draft', 'revision')"
 	}
 	err := h.DB.QueryRow(ctx, `
-		SELECT l.id::text, co.code, co.name, lt.code, lt.name,
+		SELECT l.id::text, co.code, co.name,
+		       COALESCE(co.letterhead_config #>> '{logo,storage_key}', ''),
+		       COALESCE(co.letterhead_config #>> '{logo,mime_type}', ''),
+		       lt.code, lt.name,
 		       l.subject, l.classification, l.priority, u.full_name,
 		       p.title, COALESCE(v.version, 0), COALESCE(v.body_plain, ''),
 		       l.qr_token, l.created_at, l.updated_at
@@ -538,6 +547,8 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 		&data.ID,
 		&data.CompanyCode,
 		&data.CompanyName,
+		&data.CompanyLogoKey,
+		&data.CompanyLogoMIMEType,
 		&data.LetterTypeCode,
 		&data.LetterTypeName,
 		&data.Subject,
@@ -595,7 +606,10 @@ func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (dr
 	var data draftPreviewData
 	var letterNumber *string
 	err := tx.QueryRow(ctx, `
-		SELECT l.id::text, co.code, co.name, lt.code, lt.name,
+		SELECT l.id::text, co.code, co.name,
+		       COALESCE(co.letterhead_config #>> '{logo,storage_key}', ''),
+		       COALESCE(co.letterhead_config #>> '{logo,mime_type}', ''),
+		       lt.code, lt.name,
 		       l.letter_number, l.subject, l.classification, l.priority,
 		       u.full_name, p.title, COALESCE(v.version, 0), COALESCE(v.body_plain, ''),
 		       l.qr_token, l.published_at, l.created_at, l.updated_at
@@ -615,6 +629,8 @@ func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (dr
 		&data.ID,
 		&data.CompanyCode,
 		&data.CompanyName,
+		&data.CompanyLogoKey,
+		&data.CompanyLogoMIMEType,
 		&data.LetterTypeCode,
 		&data.LetterTypeName,
 		&letterNumber,
@@ -660,7 +676,11 @@ func (h *Handler) renderAndStoreFinalPDF(ctx context.Context, tx pgx.Tx, letterI
 	if data.QRToken != nil && *data.QRToken != "" {
 		verifyURL = h.verifyURL(*data.QRToken)
 	}
-	pdfBytes, err := renderFinalLetterPDF(data, recipients, verifyURL)
+	companyLogo, err := h.loadCompanyLogo(ctx, data.CompanyLogoKey, data.CompanyLogoMIMEType)
+	if err != nil {
+		return "", errors.New("gagal memuat logo perusahaan untuk PDF final")
+	}
+	pdfBytes, err := renderFinalLetterPDF(data, recipients, verifyURL, companyLogo)
 	if err != nil {
 		return "", errors.New("gagal membuat PDF final")
 	}
@@ -674,7 +694,107 @@ func (h *Handler) renderAndStoreFinalPDF(ctx context.Context, tx pgx.Tx, letterI
 	return objectName, nil
 }
 
-func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]string) ([]byte, error) {
+// RegenerateFinalPDF replaces the stored final PDF for one published letter
+// without changing its number, publication timestamp, or verification token.
+func (h *Handler) RegenerateFinalPDF(ctx context.Context, letterID string) (string, error) {
+	letterID = strings.TrimSpace(letterID)
+	if letterID == "" {
+		return "", errors.New("letter-id wajib diisi")
+	}
+
+	tx, err := h.DB.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("memulai regenerasi PDF final: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	var letterNumber *string
+	var finalPDFKey *string
+	var publishedAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT status, letter_number, final_pdf_key, published_at
+		FROM letters
+		WHERE id = $1
+		FOR UPDATE`, letterID).Scan(&status, &letterNumber, &finalPDFKey, &publishedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", errors.New("surat tidak ditemukan")
+		}
+		return "", fmt.Errorf("memuat surat untuk regenerasi PDF final: %w", err)
+	}
+	if status != "published" {
+		return "", errors.New("PDF final hanya dapat diregenerasi untuk surat published")
+	}
+	if letterNumber == nil || strings.TrimSpace(*letterNumber) == "" {
+		return "", errors.New("surat published belum memiliki nomor")
+	}
+	if publishedAt == nil {
+		return "", errors.New("surat published belum memiliki tanggal terbit")
+	}
+	if finalPDFKey == nil || strings.TrimSpace(*finalPDFKey) == "" {
+		return "", errors.New("surat published belum memiliki objek PDF final")
+	}
+
+	objectName, err := h.renderAndStoreFinalPDF(ctx, tx, letterID, *letterNumber, *publishedAt)
+	if err != nil {
+		return "", err
+	}
+	if objectName != *finalPDFKey {
+		return "", fmt.Errorf("key PDF final hasil regenerasi %q berbeda dari key tersimpan %q", objectName, *finalPDFKey)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("menyelesaikan regenerasi PDF final: %w", err)
+	}
+
+	h.audit(ctx, "letter", &letterID, "regenerate_final_pdf", nil, map[string]any{
+		"final_pdf_key": objectName,
+	}, "")
+	return objectName, nil
+}
+
+func (h *Handler) loadCompanyLogo(ctx context.Context, storageKey string, expectedMIMEType string) ([]byte, error) {
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return nil, nil
+	}
+	if h.Minio == nil {
+		return nil, errors.New("object storage belum tersedia")
+	}
+
+	object, err := h.Minio.GetObject(ctx, h.Bucket, storageKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer object.Close()
+
+	info, err := object.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size <= 0 || info.Size > maxCompanyLogoSize {
+		return nil, errors.New("ukuran objek logo perusahaan tidak valid")
+	}
+	data, err := io.ReadAll(io.LimitReader(object, maxCompanyLogoSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxCompanyLogoSize {
+		return nil, errors.New("ukuran objek logo perusahaan melebihi batas")
+	}
+
+	logo, _, err := validateCompanyLogo(data)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(expectedMIMEType) != "" {
+		if expected := normalizeMIMEType(expectedMIMEType); expected != logo.MIMEType {
+			return nil, errors.New("tipe objek logo perusahaan tidak sesuai konfigurasi")
+		}
+	}
+	return data, nil
+}
+
+func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]string, companyLogo []byte) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetTitle(data.Subject, true)
 	pdf.SetAuthor("eOffice Pro", true)
@@ -682,13 +802,9 @@ func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]strin
 	pdf.SetAutoPageBreak(true, 18)
 	pdf.AddPage()
 
-	pdf.SetFont("Arial", "B", 14)
-	pdf.CellFormat(0, 8, data.CompanyName, "", 1, "C", false, 0, "")
-	pdf.SetFont("Arial", "", 9)
-	pdf.CellFormat(0, 5, fmt.Sprintf("%s - %s", data.LetterTypeCode, data.LetterTypeName), "", 1, "C", false, 0, "")
-	pdf.Ln(3)
-	pdf.Line(20, pdf.GetY(), 190, pdf.GetY())
-	pdf.Ln(6)
+	if err := writeLetterHeader(pdf, data, companyLogo); err != nil {
+		return nil, err
+	}
 
 	pdf.SetFont("Arial", "", 10)
 	writePDFKV(pdf, "Perihal", data.Subject)
@@ -724,7 +840,20 @@ func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]strin
 	return out.Bytes(), nil
 }
 
-func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string, verifyURL string) ([]byte, error) {
+func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string, verifyURL string, companyLogo []byte) ([]byte, error) {
+	verifyURL = strings.TrimSpace(verifyURL)
+	if verifyURL == "" {
+		return nil, errors.New("URL verifikasi wajib tersedia untuk PDF final")
+	}
+	if data.QRToken == nil || strings.TrimSpace(*data.QRToken) == "" {
+		return nil, errors.New("token QR verifikasi wajib tersedia untuk PDF final")
+	}
+
+	qrCode, err := generateVerificationQRCode(verifyURL, verificationQRCodeImageSize)
+	if err != nil {
+		return nil, fmt.Errorf("membuat QR verifikasi: %w", err)
+	}
+
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetTitle(data.Subject, true)
 	pdf.SetAuthor("eOffice Pro", true)
@@ -732,13 +861,9 @@ func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string,
 	pdf.SetAutoPageBreak(true, 18)
 	pdf.AddPage()
 
-	pdf.SetFont("Arial", "B", 14)
-	pdf.CellFormat(0, 8, data.CompanyName, "", 1, "C", false, 0, "")
-	pdf.SetFont("Arial", "", 9)
-	pdf.CellFormat(0, 5, fmt.Sprintf("%s - %s", data.LetterTypeCode, data.LetterTypeName), "", 1, "C", false, 0, "")
-	pdf.Ln(3)
-	pdf.Line(20, pdf.GetY(), 190, pdf.GetY())
-	pdf.Ln(6)
+	if err := writeLetterHeader(pdf, data, companyLogo); err != nil {
+		return nil, err
+	}
 
 	publishedAt := "-"
 	if data.PublishedAt != nil {
@@ -773,20 +898,176 @@ func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string,
 	pdf.CellFormat(0, 6, data.CreatorName, "", 1, "R", false, 0, "")
 
 	pdf.Ln(8)
-	pdf.SetFont("Arial", "I", 8)
-	if verifyURL != "" {
-		pdf.MultiCell(0, 5, "Verifikasi dokumen: "+verifyURL, "", "L", false)
+	if err := writeVerificationQRCodeBlock(pdf, qrCode.PNG, verifyURL, data.Version); err != nil {
+		return nil, err
 	}
-	if data.QRToken != nil && *data.QRToken != "" {
-		pdf.MultiCell(0, 5, "Token QR verifikasi: "+*data.QRToken, "", "L", false)
-	}
-	pdf.MultiCell(0, 5, fmt.Sprintf("PDF final v%d diterbitkan oleh eOffice Pro.", data.Version), "", "L", false)
 
 	var out bytes.Buffer
 	if err := pdf.Output(&out); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+func writeLetterHeader(pdf *gofpdf.Fpdf, data draftPreviewData, companyLogo []byte) error {
+	const (
+		headerHeight  = 16.0
+		logoBoxWidth  = 22.0
+		logoBoxHeight = 16.0
+		textX         = 45.0
+		textWidth     = 120.0
+	)
+
+	startY := pdf.GetY()
+	if len(companyLogo) > 0 {
+		imageConfig, format, err := image.DecodeConfig(bytes.NewReader(companyLogo))
+		if err != nil {
+			return fmt.Errorf("membaca logo perusahaan untuk kop: %w", err)
+		}
+
+		imageType := ""
+		switch format {
+		case "png":
+			imageType = "PNG"
+		case "jpeg":
+			imageType = "JPG"
+		default:
+			return errors.New("format logo perusahaan pada kop tidak didukung")
+		}
+		imageOptions := gofpdf.ImageOptions{ImageType: imageType, ReadDpi: true}
+		const imageName = "company-letterhead-logo"
+		if info := pdf.RegisterImageOptionsReader(imageName, imageOptions, bytes.NewReader(companyLogo)); info == nil {
+			if err := pdf.Error(); err != nil {
+				return fmt.Errorf("mendaftarkan logo perusahaan ke PDF: %w", err)
+			}
+			return errors.New("gagal mendaftarkan logo perusahaan ke PDF")
+		}
+
+		scale := min(logoBoxWidth/float64(imageConfig.Width), logoBoxHeight/float64(imageConfig.Height))
+		drawWidth := float64(imageConfig.Width) * scale
+		drawHeight := float64(imageConfig.Height) * scale
+		logoX := 20 + (logoBoxWidth-drawWidth)/2
+		logoY := startY + (logoBoxHeight-drawHeight)/2
+		pdf.ImageOptions(imageName, logoX, logoY, drawWidth, drawHeight, false, imageOptions, 0, "")
+		if err := pdf.Error(); err != nil {
+			return fmt.Errorf("menempatkan logo perusahaan pada kop: %w", err)
+		}
+
+		fontSize := 14.0
+		pdf.SetFont("Arial", "B", fontSize)
+		for pdf.GetStringWidth(data.CompanyName) > textWidth-4 && fontSize > 10 {
+			fontSize--
+			pdf.SetFont("Arial", "B", fontSize)
+		}
+		pdf.SetXY(textX, startY+1)
+		pdf.CellFormat(textWidth, 8, data.CompanyName, "", 1, "C", false, 0, "")
+		pdf.SetXY(textX, startY+9)
+		pdf.SetFont("Arial", "", 9)
+		pdf.CellFormat(textWidth, 5, fmt.Sprintf("%s - %s", data.LetterTypeCode, data.LetterTypeName), "", 1, "C", false, 0, "")
+		pdf.SetY(startY + headerHeight)
+	} else {
+		pdf.SetFont("Arial", "B", 14)
+		pdf.CellFormat(0, 8, data.CompanyName, "", 1, "C", false, 0, "")
+		pdf.SetFont("Arial", "", 9)
+		pdf.CellFormat(0, 5, fmt.Sprintf("%s - %s", data.LetterTypeCode, data.LetterTypeName), "", 1, "C", false, 0, "")
+		pdf.SetY(startY + headerHeight)
+	}
+
+	pdf.Line(20, pdf.GetY(), 190, pdf.GetY())
+	pdf.Ln(6)
+	return nil
+}
+
+type generatedVerificationQRCode struct {
+	Payload string
+	PNG     []byte
+}
+
+func generateVerificationQRCode(payload string, targetSize int) (generatedVerificationQRCode, error) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return generatedVerificationQRCode{}, errors.New("payload QR tidak boleh kosong")
+	}
+
+	code, err := qr.Encode(payload, qr.M, qr.Auto)
+	if err != nil {
+		return generatedVerificationQRCode{}, err
+	}
+	moduleCount := code.Bounds().Dx()
+	modulePixels := targetSize / (moduleCount + 2*verificationQRCodeQuietZoneModules)
+	if modulePixels < 1 {
+		return generatedVerificationQRCode{}, errors.New("ukuran gambar QR terlalu kecil")
+	}
+
+	innerSize := moduleCount * modulePixels
+	scaled, err := barcode.Scale(code, innerSize, innerSize)
+	if err != nil {
+		return generatedVerificationQRCode{}, err
+	}
+
+	quietZonePixels := verificationQRCodeQuietZoneModules * modulePixels
+	canvasSize := innerSize + 2*quietZonePixels
+	canvas := image.NewGray(image.Rect(0, 0, canvasSize, canvasSize))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	draw.Draw(
+		canvas,
+		image.Rect(quietZonePixels, quietZonePixels, quietZonePixels+innerSize, quietZonePixels+innerSize),
+		scaled,
+		scaled.Bounds().Min,
+		draw.Src,
+	)
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, canvas); err != nil {
+		return generatedVerificationQRCode{}, err
+	}
+	return generatedVerificationQRCode{
+		Payload: payload,
+		PNG:     out.Bytes(),
+	}, nil
+}
+
+func writeVerificationQRCodeBlock(pdf *gofpdf.Fpdf, qrPNG []byte, verifyURL string, version int) error {
+	const blockHeight = verificationQRCodePDFSizeMillimeter + 12
+
+	leftMargin, _, _, bottomMargin := pdf.GetMargins()
+	_, pageHeight := pdf.GetPageSize()
+	if pdf.GetY()+blockHeight > pageHeight-bottomMargin {
+		pdf.AddPage()
+	}
+
+	imageOptions := gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}
+	const imageName = "verification-qr"
+	if info := pdf.RegisterImageOptionsReader(imageName, imageOptions, bytes.NewReader(qrPNG)); info == nil {
+		if err := pdf.Error(); err != nil {
+			return fmt.Errorf("mendaftarkan gambar QR ke PDF: %w", err)
+		}
+		return errors.New("gagal mendaftarkan gambar QR ke PDF")
+	}
+
+	startY := pdf.GetY()
+	pdf.ImageOptions(
+		imageName,
+		leftMargin,
+		startY,
+		verificationQRCodePDFSizeMillimeter,
+		verificationQRCodePDFSizeMillimeter,
+		false,
+		imageOptions,
+		0,
+		verifyURL,
+	)
+	if err := pdf.Error(); err != nil {
+		return fmt.Errorf("menempatkan gambar QR ke PDF: %w", err)
+	}
+
+	pdf.SetXY(leftMargin, startY+verificationQRCodePDFSizeMillimeter+1)
+	pdf.SetFont("Arial", "B", 8)
+	pdf.CellFormat(65, 4, "Pindai untuk verifikasi dokumen", "", 1, "L", false, 0, "")
+	pdf.SetX(leftMargin)
+	pdf.SetFont("Arial", "I", 8)
+	pdf.CellFormat(80, 5, fmt.Sprintf("PDF final v%d diterbitkan oleh eOffice Pro.", version), "", 1, "L", false, 0, "")
+	return nil
 }
 
 func writePDFKV(pdf *gofpdf.Fpdf, key string, value string) {

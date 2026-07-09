@@ -43,6 +43,7 @@ type LetterDetail struct {
 
 type LetterApprovalStep struct {
 	ID            string     `json:"id"`
+	ApprovalCycle int        `json:"approval_cycle"`
 	StepOrder     int        `json:"step_order"`
 	FlowGroup     int        `json:"flow_group"`
 	Status        string     `json:"status"`
@@ -192,6 +193,16 @@ func (h *Handler) userCanViewLetter(ctx context.Context, userID string, letterID
 			FROM letter_recipients lr
 			WHERE lr.letter_id = $1
 			  AND `+recipientAccessSQL("$2")+`
+		) OR EXISTS (
+			SELECT 1
+			FROM dispositions d
+			LEFT JOIN disposition_recipients dr ON dr.disposition_id = d.id
+			JOIN user_positions up
+			  ON up.position_id IN (d.from_position_id, dr.position_id)
+			WHERE d.letter_id = $1
+			  AND up.user_id = $2
+			  AND current_date >= up.valid_from
+			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 		)`, letterID, userID).Scan(&allowed)
 	return allowed, err
 }
@@ -235,12 +246,12 @@ func (h *Handler) loadLetterRecipients(c *gin.Context, letterID string) ([]Draft
 
 func (h *Handler) loadLetterApprovalSteps(c *gin.Context, letterID string) ([]LetterApprovalStep, bool) {
 	rows, err := h.DB.Query(c.Request.Context(), `
-		SELECT s.id::text, s.step_order, s.flow_group, s.status,
+		SELECT s.id::text, s.approval_cycle, s.step_order, s.flow_group, s.status,
 		       p.title, p.position_type, s.sla_deadline, s.decided_at
 		FROM approval_steps s
 		JOIN positions p ON p.id = s.approver_position_id
 		WHERE s.letter_id = $1
-		ORDER BY s.step_order`, letterID)
+		ORDER BY s.approval_cycle, s.step_order`, letterID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat timeline approval"})
 		return nil, false
@@ -252,6 +263,7 @@ func (h *Handler) loadLetterApprovalSteps(c *gin.Context, letterID string) ([]Le
 		var step LetterApprovalStep
 		if err := rows.Scan(
 			&step.ID,
+			&step.ApprovalCycle,
 			&step.StepOrder,
 			&step.FlowGroup,
 			&step.Status,
@@ -275,13 +287,13 @@ func (h *Handler) loadLetterApprovalSteps(c *gin.Context, letterID string) ([]Le
 func (h *Handler) loadLetterApprovalActions(c *gin.Context, letterID string) ([]LetterApprovalAction, bool) {
 	rows, err := h.DB.Query(c.Request.Context(), `
 		SELECT aa.id::text, aa.approval_step_id::text, aa.action,
-		       u.full_name, aa.note, aa.device_info, aa.created_at, p.title
+		       u.full_name, aa.note, aa.device_info, aa.acted_at, p.title
 		FROM approval_actions aa
 		JOIN approval_steps s ON s.id = aa.approval_step_id
 		JOIN users u ON u.id = aa.acted_by_user_id
 		JOIN positions p ON p.id = s.approver_position_id
 		WHERE s.letter_id = $1
-		ORDER BY aa.created_at`, letterID)
+		ORDER BY aa.acted_at`, letterID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat aksi approval"})
 		return nil, false

@@ -4,19 +4,24 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   listApprovalInbox,
+  listDispositionInbox,
   listIncomingLetters,
   listMyLetters,
+  updateDispositionStatus,
   type ApprovalInboxItem,
+  type DispositionInboxItem,
+  type DispositionStatus,
   type DraftLetter,
   type IncomingLetter,
 } from "@/lib/api";
 
-type InboxTab = "to" | "cc" | "actions" | "sent";
+type InboxTab = "to" | "cc" | "actions" | "dispositions" | "sent";
 
 interface InboxData {
   to: IncomingLetter[];
   cc: IncomingLetter[];
   approvals: ApprovalInboxItem[];
+  dispositions: DispositionInboxItem[];
   sent: DraftLetter[];
 }
 
@@ -24,6 +29,7 @@ const TAB_LABEL: Record<InboxTab, string> = {
   to: "Surat Masuk",
   cc: "Tembusan",
   actions: "Menunggu Aksi",
+  dispositions: "Disposisi",
   sent: "Terkirim",
 };
 
@@ -54,6 +60,18 @@ const STATUS_LABEL: Record<DraftLetter["status"], string> = {
   archived: "Arsip",
 };
 
+const DISPOSITION_STATUS_LABEL: Record<DispositionStatus, string> = {
+  open: "Belum diproses",
+  in_progress: "Diproses",
+  done: "Selesai",
+};
+
+const DISPOSITION_STATUS_STYLE: Record<DispositionStatus, string> = {
+  open: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  in_progress: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  done: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+};
+
 function formatDate(value: string | null): string {
   if (!value) return "-";
   const date = new Date(value);
@@ -62,6 +80,19 @@ function formatDate(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
+}
+
+function formatDateOnly(value: string | null): string {
+  if (!value) return "-";
+  const [year, month, day] = value.slice(0, 10).split("-");
+  if (!year || !month || !day) return "-";
+  return `${day}/${month}/${year}`;
+}
+
+function isOverdue(value: string | null, status?: DispositionStatus): boolean {
+  if (!value || status === "done") return false;
+  const due = new Date(`${value.slice(0, 10)}T23:59:59`);
+  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
 }
 
 function excerpt(value: string, limit = 220): string {
@@ -75,16 +106,19 @@ function matchesSearch(value: string, query: string): boolean {
 }
 
 async function fetchInboxData(): Promise<InboxData> {
-  const [toData, ccData, approvalData, sentData] = await Promise.all([
-    listIncomingLetters("to"),
-    listIncomingLetters("cc"),
-    listApprovalInbox(),
-    listMyLetters(),
-  ]);
+  const [toData, ccData, approvalData, dispositionData, sentData] =
+    await Promise.all([
+      listIncomingLetters("to"),
+      listIncomingLetters("cc"),
+      listApprovalInbox(),
+      listDispositionInbox(),
+      listMyLetters(),
+    ]);
   return {
     to: toData.letters,
     cc: ccData.letters,
     approvals: approvalData.approvals,
+    dispositions: dispositionData.dispositions,
     sent: sentData.letters,
   };
 }
@@ -94,29 +128,34 @@ export default function InboxPage() {
   const [toLetters, setToLetters] = useState<IncomingLetter[]>([]);
   const [ccLetters, setCcLetters] = useState<IncomingLetter[]>([]);
   const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+  const [dispositions, setDispositions] = useState<DispositionInboxItem[]>([]);
   const [sentLetters, setSentLetters] = useState<DraftLetter[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busyRecipientID, setBusyRecipientID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const applyData = useCallback((data: InboxData) => {
+    setToLetters(data.to);
+    setCcLetters(data.cc);
+    setApprovals(data.approvals);
+    setDispositions(data.dispositions);
+    setSentLetters(data.sent);
+  }, []);
 
   const reload = useCallback(async () => {
     setError(null);
     const data = await fetchInboxData();
-    setToLetters(data.to);
-    setCcLetters(data.cc);
-    setApprovals(data.approvals);
-    setSentLetters(data.sent);
-  }, []);
+    applyData(data);
+  }, [applyData]);
 
   useEffect(() => {
     let active = true;
     fetchInboxData()
       .then((data) => {
         if (!active) return;
-        setToLetters(data.to);
-        setCcLetters(data.cc);
-        setApprovals(data.approvals);
-        setSentLetters(data.sent);
+        applyData(data);
       })
       .catch((err) => {
         if (!active) return;
@@ -128,16 +167,17 @@ export default function InboxPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [applyData]);
 
   const stats = useMemo(
     () => ({
       to: toLetters.filter((item) => !item.is_read).length,
       cc: ccLetters.filter((item) => !item.is_read).length,
       actions: approvals.length,
+      dispositions: dispositions.filter((item) => item.status !== "done").length,
       sent: sentLetters.length,
     }),
-    [approvals.length, ccLetters, sentLetters.length, toLetters],
+    [approvals.length, ccLetters, dispositions, sentLetters.length, toLetters],
   );
 
   const filteredTo = useMemo(
@@ -170,6 +210,17 @@ export default function InboxPage() {
     [approvals, query],
   );
 
+  const filteredDispositions = useMemo(
+    () =>
+      dispositions.filter((item) =>
+        matchesSearch(
+          `${item.letter_subject} ${item.letter_number ?? ""} ${item.from_position_title} ${item.creator_name} ${item.my_position_title} ${item.instruction}`,
+          query,
+        ),
+      ),
+    [dispositions, query],
+  );
+
   const filteredSent = useMemo(
     () =>
       sentLetters.filter((item) =>
@@ -181,6 +232,38 @@ export default function InboxPage() {
     [query, sentLetters],
   );
 
+  async function handleDispositionStatus(
+    item: DispositionInboxItem,
+    status: "in_progress" | "done",
+    followupNote: string,
+  ) {
+    const note = followupNote.trim();
+    if (status === "done" && !note) {
+      setError("Laporan tindak lanjut wajib diisi saat menyelesaikan disposisi.");
+      return;
+    }
+
+    setBusyRecipientID(item.recipient_id);
+    setError(null);
+    setSuccess(null);
+    try {
+      await updateDispositionStatus(item.recipient_id, {
+        status,
+        followup_note: note,
+      });
+      await reload();
+      setSuccess(
+        status === "done"
+          ? "Disposisi ditandai selesai."
+          : "Disposisi ditandai sedang diproses.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal memperbarui disposisi");
+    } finally {
+      setBusyRecipientID(null);
+    }
+  }
+
   return (
     <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -189,7 +272,8 @@ export default function InboxPage() {
             Surat Masuk
           </h1>
           <p className="text-sm text-zinc-500">
-            {stats.to + stats.cc} surat belum dibaca dan {stats.actions} menunggu aksi
+            {stats.to + stats.cc} surat belum dibaca, {stats.actions} approval, dan{" "}
+            {stats.dispositions} disposisi aktif
           </p>
         </div>
         <button
@@ -198,7 +282,7 @@ export default function InboxPage() {
               setError(err instanceof Error ? err.message : "Gagal memuat ulang"),
             )
           }
-          disabled={loading}
+          disabled={loading || busyRecipientID !== null}
           className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           Muat Ulang
@@ -207,7 +291,7 @@ export default function InboxPage() {
 
       <div className="mb-5 grid gap-3 lg:grid-cols-[1fr_280px]">
         <div className="flex flex-wrap gap-2">
-          {(["to", "cc", "actions", "sent"] as const).map((tab) => {
+          {(["to", "cc", "actions", "dispositions", "sent"] as const).map((tab) => {
             const active = activeTab === tab;
             return (
               <button
@@ -236,11 +320,16 @@ export default function InboxPage() {
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Cari surat"
+          placeholder="Cari surat atau disposisi"
           className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
         />
       </div>
 
+      {success && (
+        <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+          {success}
+        </p>
+      )}
       {error && (
         <p
           role="alert"
@@ -259,6 +348,13 @@ export default function InboxPage() {
       )}
       {!loading && activeTab === "actions" && (
         <ApprovalList approvals={filteredApprovals} />
+      )}
+      {!loading && activeTab === "dispositions" && (
+        <DispositionList
+          busyRecipientID={busyRecipientID}
+          dispositions={filteredDispositions}
+          onStatusChange={handleDispositionStatus}
+        />
       )}
       {!loading && activeTab === "sent" && <SentList letters={filteredSent} />}
     </main>
@@ -394,6 +490,135 @@ function ApprovalList({ approvals }: { approvals: ApprovalInboxItem[] }) {
           </p>
         </article>
       ))}
+    </div>
+  );
+}
+
+function DispositionList({
+  dispositions,
+  busyRecipientID,
+  onStatusChange,
+}: {
+  dispositions: DispositionInboxItem[];
+  busyRecipientID: string | null;
+  onStatusChange: (
+    item: DispositionInboxItem,
+    status: "in_progress" | "done",
+    followupNote: string,
+  ) => Promise<void>;
+}) {
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
+  if (dispositions.length === 0) {
+    return (
+      <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
+        Tidak ada disposisi untuk jabatan aktif Anda.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid gap-3">
+      {dispositions.map((item) => {
+        const note = notes[item.recipient_id] ?? item.followup_note ?? "";
+        const busy = busyRecipientID === item.recipient_id;
+        const disabled = busyRecipientID !== null || item.status === "done";
+        const overdue = isOverdue(item.due_date, item.status);
+
+        return (
+          <article
+            key={item.recipient_id}
+            className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${DISPOSITION_STATUS_STYLE[item.status]}`}
+                  >
+                    {DISPOSITION_STATUS_LABEL[item.status]}
+                  </span>
+                  {overdue && (
+                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800 dark:bg-red-950 dark:text-red-300">
+                      Lewat tenggat
+                    </span>
+                  )}
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                    Untuk {item.my_position_title}
+                  </span>
+                </div>
+                <h2 className="text-base font-semibold text-zinc-950 dark:text-zinc-50">
+                  {item.letter_subject}
+                </h2>
+                <p className="mt-1 font-mono text-xs text-navy-600 dark:text-sky-400">
+                  {item.letter_number ?? "Nomor belum tersedia"}
+                </p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Dari {item.creator_name} · {item.from_position_title}
+                </p>
+              </div>
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <p className="text-xs text-zinc-500">
+                  Tenggat {formatDateOnly(item.due_date)}
+                </p>
+                <Link
+                  href={`/letters/${item.letter_id}`}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Buka Detail
+                </Link>
+              </div>
+            </div>
+
+            <p className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3 text-sm leading-6 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300">
+              {excerpt(item.instruction, 520)}
+            </p>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+              <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                Laporan tindak lanjut
+                <textarea
+                  value={note}
+                  onChange={(event) =>
+                    setNotes((current) => ({
+                      ...current,
+                      [item.recipient_id]: event.target.value,
+                    }))
+                  }
+                  disabled={item.status === "done"}
+                  rows={3}
+                  maxLength={1200}
+                  placeholder="Wajib saat menandai selesai"
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:disabled:bg-zinc-900"
+                />
+              </label>
+              <div className="flex flex-wrap gap-2 md:justify-end">
+                {item.status === "open" && (
+                  <button
+                    onClick={() => void onStatusChange(item, "in_progress", note)}
+                    disabled={disabled}
+                    className="rounded-lg border border-sky-300 px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950"
+                  >
+                    {busy ? "Memproses..." : "Mulai Proses"}
+                  </button>
+                )}
+                <button
+                  onClick={() => void onStatusChange(item, "done", note)}
+                  disabled={disabled}
+                  className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {busy ? "Menyimpan..." : item.status === "done" ? "Selesai" : "Tandai Selesai"}
+                </button>
+              </div>
+            </div>
+            {item.completed_at && (
+              <p className="mt-2 text-xs text-zinc-500">
+                Selesai {formatDate(item.completed_at)}
+              </p>
+            )}
+          </article>
+        );
+      })}
     </div>
   );
 }

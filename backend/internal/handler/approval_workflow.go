@@ -101,6 +101,40 @@ func loadDraftRecipientRequests(ctx context.Context, tx pgx.Tx, letterID string)
 	return recipients, rows.Err()
 }
 
+func insertApprovalRoute(ctx context.Context, tx pgx.Tx, letterID string, route approvalRoute) (int, error) {
+	var approvalCycle int
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(approval_cycle), 0) + 1
+		FROM approval_steps
+		WHERE letter_id = $1`, letterID).Scan(&approvalCycle)
+	if err != nil {
+		return 0, fmt.Errorf("determine approval cycle: %w", err)
+	}
+
+	for _, step := range route.Steps {
+		status := "pending"
+		if step.StepOrder == 1 {
+			status = "waiting"
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO approval_steps
+				(letter_id, approval_cycle, step_order, approver_position_id, flow_group, status, sla_deadline)
+			VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(hours => $7::int))`,
+			letterID,
+			approvalCycle,
+			step.StepOrder,
+			step.PositionID,
+			step.FlowGroup,
+			status,
+			route.SLAHours,
+		); err != nil {
+			return 0, fmt.Errorf("insert approval step %d: %w", step.StepOrder, err)
+		}
+	}
+
+	return approvalCycle, nil
+}
+
 func (h *Handler) resolveApprovalRoute(ctx context.Context, tx pgx.Tx, letterTypeID string, creatorPositionID string) (approvalRoute, error) {
 	var (
 		finalLevel sql.NullString

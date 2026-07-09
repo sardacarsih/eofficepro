@@ -695,6 +695,35 @@ func (f *userPositionFixture) cleanup(t *testing.T) {
 		t.Logf("cleanup letter recipients error: %v", err)
 	}
 	if _, err := f.db.Exec(ctx, `
+		DELETE FROM disposition_recipients
+		WHERE disposition_id IN (
+			SELECT disposition.id
+			FROM dispositions disposition
+			JOIN letters letter ON letter.id = disposition.letter_id
+			WHERE letter.creator_user_id = ANY($1::uuid[])
+		)`, f.cleanupIDs); err != nil {
+		t.Logf("cleanup disposition recipients error: %v", err)
+	}
+	if _, err := f.db.Exec(ctx, `
+		DELETE FROM dispositions
+		WHERE letter_id IN (
+			SELECT id
+			FROM letters
+			WHERE creator_user_id = ANY($1::uuid[])
+		)`, f.cleanupIDs); err != nil {
+		t.Logf("cleanup dispositions error: %v", err)
+	}
+	if _, err := f.db.Exec(ctx, `
+		DELETE FROM approval_actions
+		WHERE approval_step_id IN (
+			SELECT step.id
+			FROM approval_steps step
+			JOIN letters letter ON letter.id = step.letter_id
+			WHERE letter.creator_user_id = ANY($1::uuid[])
+		)`, f.cleanupIDs); err != nil {
+		t.Logf("cleanup approval actions error: %v", err)
+	}
+	if _, err := f.db.Exec(ctx, `
 		DELETE FROM approval_steps
 		WHERE letter_id IN (SELECT id FROM letters WHERE creator_user_id = ANY($1::uuid[]))`, f.cleanupIDs); err != nil {
 		t.Logf("cleanup approval steps error: %v", err)
