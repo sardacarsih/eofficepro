@@ -7,6 +7,18 @@ pembuatan surat, approval berjenjang, disposisi, tracking, arsip, paperless.
 [Backlog](docs/BACKLOG.md) · [Skema DB](docs/DATABASE-SCHEMA.md) ·
 [Ringkasan Eksekutif](docs/RINGKASAN-EKSEKUTIF.md)
 
+## Screenshot
+
+| | |
+|---|---|
+| **Login** | ![Login](docs/images/loginpage.png) |
+| **Dashboard** | ![Dashboard](docs/images/dashboard.png) |
+| **Tulis Surat** | ![Tulis Surat](docs/images/createsurat.png) |
+| **Surat Masuk** | ![Surat Masuk](docs/images/suratmasuk.png) |
+| **Approval** | ![Approval](docs/images/approval.png) |
+| **Jenis Surat** | ![Jenis Surat](docs/images/jenissurat.png) |
+| **Matrix Approval** | ![Matrix Approval](docs/images/matrix.png) |
+
 ## Stack
 
 | Bagian | Teknologi |
