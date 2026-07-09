@@ -90,24 +90,38 @@ func (h *Handler) ListDraftLetters(c *gin.Context) {
 
 func (h *Handler) ListMyLetters(c *gin.Context) {
 	userID := c.GetString(middleware.CtxUserID)
-	rows, err := h.DB.Query(c.Request.Context(), draftLetterSelect(`
+	ctx := c.Request.Context()
+
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM letters l WHERE l.creator_user_id = $1`, userID).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung surat saya"})
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, draftLetterSelect(`
 		WHERE l.creator_user_id = $1
 		ORDER BY l.updated_at DESC
-		LIMIT 50`), userID)
+		LIMIT $2 OFFSET $3`), userID, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat surat saya"})
 		return
 	}
 	defer rows.Close()
 
-	letters, ok := scanDraftLetters(c, rows)
-	if !ok {
+	letters, scanOK := scanDraftLetters(c, rows)
+	if !scanOK {
 		return
 	}
 	if !h.attachDraftRecipients(c, letters) {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"letters": letters})
+	c.JSON(http.StatusOK, gin.H{"data": letters, "meta": newPageMeta(page, pageSize, total)})
 }
 
 func (h *Handler) GetDraftLetter(c *gin.Context) {

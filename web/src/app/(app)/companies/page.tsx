@@ -12,7 +12,9 @@ import {
   updateCompany,
   type Company,
   type CompanyPayload,
+  type PageMeta,
 } from "@/lib/api";
+import Pagination from "@/components/Pagination";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 import {
   BuildingIcon,
@@ -60,6 +62,8 @@ export default function CompaniesPage() {
   const me = useCurrentUser();
   const previewURLRef = useRef<string | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [companyForm, setCompanyForm] = useState<{ company: Company | null } | null>(
     null,
   );
@@ -81,13 +85,17 @@ export default function CompaniesPage() {
   }, [me, router]);
 
   useEffect(() => {
-    listCompanies(true)
-      .then((data) => setCompanies(data.companies))
+    queueMicrotask(() => setLoading(true));
+    listCompanies({ includeInactive: true, page })
+      .then((data) => {
+        setCompanies(data.data);
+        setMeta(data.meta);
+      })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat perusahaan"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   useEffect(
     () => () => {
@@ -106,8 +114,9 @@ export default function CompaniesPage() {
   );
 
   async function reload() {
-    const data = await listCompanies(true);
-    setCompanies(data.companies);
+    const data = await listCompanies({ includeInactive: true, page });
+    setCompanies(data.data);
+    setMeta(data.meta);
   }
 
   function clearSelectedFile() {
@@ -455,6 +464,14 @@ export default function CompaniesPage() {
                   })}
               </tbody>
             </table>
+          </div>
+          <div className="px-5">
+            <Pagination
+              page={page}
+              totalPages={meta?.total_pages ?? 1}
+              onPageChange={setPage}
+              disabled={loading}
+            />
           </div>
         </div>
       </main>

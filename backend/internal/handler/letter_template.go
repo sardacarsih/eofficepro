@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,12 @@ func (h *Handler) ListLetterTemplates(c *gin.Context) {
 	letterTypeID := strings.TrimSpace(c.Query("letter_type_id"))
 	companyID := strings.TrimSpace(c.Query("company_id"))
 
+	page, pageSize, offset, pageOK := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !pageOK {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
 	args := []any{}
 	where := []string{}
 	if !includeInactive {
@@ -57,6 +64,21 @@ func (h *Handler) ListLetterTemplates(c *gin.Context) {
 		args = append(args, companyID)
 		where = append(where, fmt.Sprintf("t.company_id = $%d", len(args)))
 	}
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	ctx := c.Request.Context()
+	var total int64
+	if err := h.DB.QueryRow(ctx, `
+		SELECT count(*)
+		FROM letter_templates t
+		JOIN letter_types lt ON lt.id = t.letter_type_id
+		JOIN companies co ON co.id = t.company_id`+whereSQL, args...).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung template surat"})
+		return
+	}
 
 	query := `
 		SELECT t.id::text, t.letter_type_id::text, lt.code, lt.name,
@@ -64,13 +86,13 @@ func (h *Handler) ListLetterTemplates(c *gin.Context) {
 		       t.layout_config, t.body_skeleton, t.is_active, t.created_at
 		FROM letter_templates t
 		JOIN letter_types lt ON lt.id = t.letter_type_id
-		JOIN companies co ON co.id = t.company_id`
-	if len(where) > 0 {
-		query += " WHERE " + strings.Join(where, " AND ")
-	}
-	query += " ORDER BY co.code, lt.code, t.version DESC"
+		JOIN companies co ON co.id = t.company_id` +
+		whereSQL +
+		` ORDER BY co.code, lt.code, t.version DESC
+		LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
 
-	rows, err := h.DB.Query(c.Request.Context(), query, args...)
+	limitArgs := append(append([]any{}, args...), pageSize, offset)
+	rows, err := h.DB.Query(ctx, query, limitArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat template surat"})
 		return
@@ -81,7 +103,7 @@ func (h *Handler) ListLetterTemplates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"letter_templates": templates})
+	c.JSON(http.StatusOK, gin.H{"data": templates, "meta": newPageMeta(page, pageSize, total)})
 }
 
 func (h *Handler) CreateLetterTemplate(c *gin.Context) {

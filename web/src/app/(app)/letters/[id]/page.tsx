@@ -7,7 +7,7 @@ import {
   createDisposition,
   getLetterDetail,
   listLetterDispositions,
-  listPositions,
+  listAllPositions,
   type DispositionItem,
   type DispositionRecipient,
   type DispositionStatus,
@@ -154,8 +154,8 @@ export default function LetterDetailPage() {
   );
 
   const loadDispositions = useCallback(async () => {
-    const data = await listLetterDispositions(params.id);
-    setDispositions(data.dispositions);
+    const data = await listLetterDispositions(params.id, { pageSize: 100 });
+    setDispositions(data.data);
   }, [params.id]);
 
   useEffect(() => {
@@ -165,9 +165,11 @@ export default function LetterDetailPage() {
       setDispositionAccess("loading");
 
       try {
-        const dispositionData = await listLetterDispositions(params.id);
+        const dispositionData = await listLetterDispositions(params.id, {
+          pageSize: 100,
+        });
         if (!active) return;
-        setDispositions(dispositionData.dispositions);
+        setDispositions(dispositionData.data);
         setDispositionAccess("allowed");
       } catch (err) {
         if (!active) return;
@@ -183,9 +185,9 @@ export default function LetterDetailPage() {
       }
 
       try {
-        const positionData = await listPositions();
+        const positionData = await listAllPositions();
         if (!active) return;
-        setPositions(positionData.positions);
+        setPositions(positionData.data);
       } catch (err) {
         if (!active) return;
         setDispositionLoadError(

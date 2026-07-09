@@ -60,22 +60,41 @@ var validApprovalMatrixFinalLevels = map[string]bool{
 
 func (h *Handler) ListApprovalMatrices(c *gin.Context) {
 	includeInactive := c.Query("include_inactive") == "true"
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
+	whereSQL := ""
+	if !includeInactive {
+		whereSQL = ` WHERE am.is_active`
+	}
+
+	ctx := c.Request.Context()
+	var total int64
+	if err := h.DB.QueryRow(ctx, `
+		SELECT count(*)
+		FROM approval_matrices am
+		JOIN letter_types lt ON lt.id = am.letter_type_id`+whereSQL).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung matrix approval"})
+		return
+	}
+
 	query := `
 		SELECT am.id::text, am.letter_type_id::text, lt.code, lt.name,
 		       am.originator_level, am.final_level, am.flow_mode, am.is_active,
 		       am.created_at, am.updated_at
 		FROM approval_matrices am
-		JOIN letter_types lt ON lt.id = am.letter_type_id`
-	if !includeInactive {
-		query += ` WHERE am.is_active`
-	}
-	query += `
+		JOIN letter_types lt ON lt.id = am.letter_type_id` +
+		whereSQL + `
 		ORDER BY lt.code,
 		         CASE WHEN am.originator_level IS NULL THEN 0 ELSE 1 END,
 		         am.originator_level NULLS FIRST,
-		         am.created_at DESC`
+		         am.created_at DESC
+		LIMIT $1 OFFSET $2`
 
-	rows, err := h.DB.Query(c.Request.Context(), query)
+	rows, err := h.DB.Query(ctx, query, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat matrix approval"})
 		return
@@ -107,7 +126,7 @@ func (h *Handler) ListApprovalMatrices(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"approval_matrices": matrices})
+	c.JSON(http.StatusOK, gin.H{"data": matrices, "meta": newPageMeta(page, pageSize, total)})
 }
 
 func (h *Handler) CreateApprovalMatrix(c *gin.Context) {

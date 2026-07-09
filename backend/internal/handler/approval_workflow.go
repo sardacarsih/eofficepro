@@ -486,11 +486,15 @@ func (h *Handler) uniqueQRToken(ctx context.Context, tx pgx.Tx) (string, error) 
 
 func (h *Handler) ListApprovalInbox(c *gin.Context) {
 	userID := c.GetString(middleware.CtxUserID)
-	rows, err := h.DB.Query(c.Request.Context(), `
-		SELECT s.id::text, s.letter_id::text, s.step_order, s.status,
-		       l.subject, l.priority, l.classification, lt.code, co.code,
-		       p.title, u.full_name, cp.title, COALESCE(v.body_plain, ''),
-		       COALESCE(a.attachment_count, 0), l.updated_at
+	ctx := c.Request.Context()
+
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
+	inboxSQL := `
 		FROM approval_steps s
 		JOIN letters l ON l.id = s.letter_id
 		JOIN letter_types lt ON lt.id = l.letter_type_id
@@ -515,8 +519,22 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 		  AND current_date >= up.valid_from
 		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 		  AND s.status = 'waiting'
-		  AND l.status = 'in_approval'
-		ORDER BY l.priority DESC, l.updated_at ASC`, userID)
+		  AND l.status = 'in_approval'`
+
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) `+inboxSQL, userID).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung inbox approval"})
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT s.id::text, s.letter_id::text, s.step_order, s.status,
+		       l.subject, l.priority, l.classification, lt.code, co.code,
+		       p.title, u.full_name, cp.title, COALESCE(v.body_plain, ''),
+		       COALESCE(a.attachment_count, 0), l.updated_at `+
+		inboxSQL+`
+		ORDER BY l.priority DESC, l.updated_at ASC
+		LIMIT $2 OFFSET $3`, userID, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat inbox approval"})
 		return
@@ -569,7 +587,7 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca daftar approval"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"approvals": items})
+	c.JSON(http.StatusOK, gin.H{"data": items, "meta": newPageMeta(page, pageSize, total)})
 }
 
 func (h *Handler) ActApprovalStep(c *gin.Context) {

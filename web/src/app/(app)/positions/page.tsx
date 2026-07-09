@@ -11,10 +11,12 @@ import {
   listPositions,
   updatePosition,
   type OrgUnit,
+  type PageMeta,
   type Position,
   type PositionDeactivationImpact,
   type PositionPayload,
 } from "@/lib/api";
+import Pagination from "@/components/Pagination";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 import {
   DEFAULT_APPROVER_POSITION_TYPES,
@@ -264,6 +266,8 @@ export default function PositionsPage() {
   const router = useRouter();
   const me = useCurrentUser();
   const [positions, setPositions] = useState<Position[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [orgUnits, setOrgUnits] = useState<OrgUnit[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -288,10 +292,11 @@ export default function PositionsPage() {
 
   async function reload() {
     const [positionData, orgData] = await Promise.all([
-      listPositions(true),
+      listPositions({ includeInactive: true, page }),
       getOrgTree(),
     ]);
-    setPositions(positionData.positions);
+    setPositions(positionData.data);
+    setMeta(positionData.meta);
     setOrgUnits(flattenOrgUnits(orgData.tree));
   }
 
@@ -302,16 +307,18 @@ export default function PositionsPage() {
   }, [me, router]);
 
   useEffect(() => {
-    Promise.all([listPositions(true), getOrgTree()])
+    queueMicrotask(() => setLoading(true));
+    Promise.all([listPositions({ includeInactive: true, page }), getOrgTree()])
       .then(([positionData, orgData]) => {
-        setPositions(positionData.positions);
+        setPositions(positionData.data);
+        setMeta(positionData.meta);
         setOrgUnits(flattenOrgUnits(orgData.tree));
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Gagal memuat master jabatan");
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   const activePositions = positions.filter((position) => position.is_active);
   const occupiedCount = activePositions.filter((position) => position.holder_name).length;
@@ -530,6 +537,9 @@ export default function PositionsPage() {
               placeholder="Cari jabatan, unit, atasan, atau pemegang..."
               className="h-10 w-full rounded-lg border border-zinc-300 bg-white pl-9 pr-3 text-sm text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
             />
+            <span className="mt-1 block text-[11px] text-zinc-400">
+              Pencarian dan filter hanya berlaku pada halaman ini
+            </span>
           </label>
           <select
             aria-label="Filter level unit"
@@ -697,6 +707,14 @@ export default function PositionsPage() {
               </tbody>
             </table>
           </div>
+          <div className="px-4">
+            <Pagination
+              page={page}
+              totalPages={meta?.total_pages ?? 1}
+              onPageChange={setPage}
+              disabled={loading}
+            />
+          </div>
         </section>
 
         <section className="grid gap-3 lg:hidden">
@@ -777,6 +795,12 @@ export default function PositionsPage() {
               </div>
             </article>
           ))}
+          <Pagination
+            page={page}
+            totalPages={meta?.total_pages ?? 1}
+            onPageChange={setPage}
+            disabled={loading}
+          />
         </section>
       </main>
 

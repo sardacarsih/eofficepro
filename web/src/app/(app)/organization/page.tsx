@@ -8,7 +8,7 @@ import {
 } from "@/components/layout/icons";
 import {
   getOrgTree,
-  listPositions,
+  listAllPositions,
   type OrgUnit,
   type Position,
 } from "@/lib/api";
@@ -504,11 +504,11 @@ export default function OrganizationPage() {
   }, [positions]);
 
   useEffect(() => {
-    Promise.all([getOrgTree(), listPositions()])
+    Promise.all([getOrgTree(), listAllPositions()])
       .then(([org, positionData]) => {
         const nextIndexes = buildIndexes(org.tree);
         setTree(org.tree);
-        setPositions(positionData.positions);
+        setPositions(positionData.data);
         setTotal(org.total);
         setExpandedIDs(new Set(nextIndexes.defaultExpandedIDs));
         setSelectedID(org.tree[0]?.id ?? null);

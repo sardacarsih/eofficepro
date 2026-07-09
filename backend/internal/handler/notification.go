@@ -150,14 +150,29 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 	userID := c.GetString(middleware.CtxUserID)
 	ctx := c.Request.Context()
 
-	limit := notificationDefaultLimit
-	if raw := c.Query("limit"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "limit tidak valid"})
-			return
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+	if c.Query("page_size") == "" {
+		if raw := c.Query("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "limit tidak valid"})
+				return
+			}
+			pageSize = min(parsed, notificationMaxLimit)
+		} else {
+			pageSize = notificationDefaultLimit
 		}
-		limit = min(parsed, notificationMaxLimit)
+		offset = (page - 1) * pageSize
+	}
+
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE user_id = $1`, userID).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung notifikasi"})
+		return
 	}
 
 	rows, err := h.DB.Query(ctx, `
@@ -165,7 +180,7 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 		FROM notifications
 		WHERE user_id = $1
 		ORDER BY created_at DESC
-		LIMIT $2`, userID, limit)
+		LIMIT $2 OFFSET $3`, userID, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat notifikasi"})
 		return
@@ -202,7 +217,10 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"notifications": items, "unread_count": unread})
+	c.JSON(http.StatusOK, gin.H{
+		"data": items, "unread_count": unread,
+		"meta": newPageMeta(page, pageSize, total),
+	})
 }
 
 func (h *Handler) MarkNotificationRead(c *gin.Context) {

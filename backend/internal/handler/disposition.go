@@ -265,6 +265,12 @@ func (h *Handler) ListLetterDispositions(c *gin.Context) {
 	letterID := c.Param("id")
 	ctx := c.Request.Context()
 
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
 	var isCreator bool
 	if err := h.DB.QueryRow(ctx,
 		`SELECT creator_user_id = $2 FROM letters WHERE id = $1`, letterID, userID).
@@ -287,15 +293,21 @@ func (h *Handler) ListLetterDispositions(c *gin.Context) {
 		}
 	}
 
-	items, err := h.loadDispositions(ctx, letterID)
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM dispositions WHERE letter_id = $1`, letterID).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung disposisi"})
+		return
+	}
+
+	items, err := h.loadDispositions(ctx, letterID, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat disposisi"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"dispositions": items})
+	c.JSON(http.StatusOK, gin.H{"data": items, "meta": newPageMeta(page, pageSize, total)})
 }
 
-func (h *Handler) loadDispositions(ctx context.Context, letterID string) ([]dispositionItem, error) {
+func (h *Handler) loadDispositions(ctx context.Context, letterID string, pageSize, offset int) ([]dispositionItem, error) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT d.id::text, d.letter_id::text, d.parent_disposition_id::text,
 		       d.from_position_id::text, p.title, u.full_name,
@@ -304,7 +316,8 @@ func (h *Handler) loadDispositions(ctx context.Context, letterID string) ([]disp
 		JOIN positions p ON p.id = d.from_position_id
 		JOIN users u ON u.id = d.created_by
 		WHERE d.letter_id = $1
-		ORDER BY d.created_at`, letterID)
+		ORDER BY d.created_at
+		LIMIT $2 OFFSET $3`, letterID, pageSize, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -403,8 +416,15 @@ type dispositionInboxItem struct {
 // ListDispositionInbox — disposisi yang ditujukan ke jabatan aktif pengguna.
 func (h *Handler) ListDispositionInbox(c *gin.Context) {
 	userID := c.GetString(middleware.CtxUserID)
+	ctx := c.Request.Context()
 
-	rows, err := h.DB.Query(c.Request.Context(), `
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
+	}
+
+	inboxCTE := `
 		SELECT DISTINCT ON (dr.id)
 		       dr.id::text, d.id::text, l.id::text, l.subject, l.letter_number,
 		       fp.title, cu.full_name, mp.title,
@@ -420,7 +440,19 @@ func (h *Handler) ListDispositionInbox(c *gin.Context) {
 		WHERE up.user_id = $1
 		  AND current_date >= up.valid_from
 		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
-		ORDER BY dr.id, d.created_at DESC`, userID)
+		ORDER BY dr.id, d.created_at DESC`
+
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM (`+inboxCTE+`) inbox`, userID).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung inbox disposisi"})
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT *
+		FROM (`+inboxCTE+`) inbox
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`, userID, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat inbox disposisi"})
 		return
@@ -456,8 +488,7 @@ func (h *Handler) ListDispositionInbox(c *gin.Context) {
 		return
 	}
 
-	// Urutkan: belum selesai dulu, lalu tenggat terdekat.
-	c.JSON(http.StatusOK, gin.H{"dispositions": items})
+	c.JSON(http.StatusOK, gin.H{"data": items, "meta": newPageMeta(page, pageSize, total)})
 }
 
 type updateDispositionStatusRequest struct {

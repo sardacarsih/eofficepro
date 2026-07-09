@@ -6,16 +6,18 @@ import {
   createApprovalMatrix,
   deactivateApprovalMatrix,
   listApprovalMatrices,
-  listLetterTypes,
+  listAllLetterTypes,
   updateApprovalMatrix,
   type ApprovalMatrix,
   type ApprovalMatrixFinalLevel,
   type ApprovalMatrixPayload,
   type ApprovalMatrixPositionLevel,
   type LetterType,
+  type PageMeta,
 } from "@/lib/api";
 import { POSITION_TYPE_LABEL } from "@/lib/position-types";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+import Pagination from "@/components/Pagination";
 
 const ORIGINATOR_LEVELS: ApprovalMatrixPositionLevel[] = [
   "secretary",
@@ -112,6 +114,8 @@ export default function ApprovalMatricesPage() {
   const router = useRouter();
   const me = useCurrentUser();
   const [matrices, setMatrices] = useState<ApprovalMatrix[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta | null>(null);
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -124,11 +128,12 @@ export default function ApprovalMatricesPage() {
 
   async function reload() {
     const [matrixData, typeData] = await Promise.all([
-      listApprovalMatrices(true),
-      listLetterTypes(true),
+      listApprovalMatrices({ includeInactive: true, page }),
+      listAllLetterTypes(true),
     ]);
-    setMatrices(matrixData.approval_matrices);
-    setLetterTypes(typeData.letter_types);
+    setMatrices(matrixData.data);
+    setMeta(matrixData.meta);
+    setLetterTypes(typeData.data);
   }
 
   useEffect(() => {
@@ -138,16 +143,21 @@ export default function ApprovalMatricesPage() {
   }, [me, router]);
 
   useEffect(() => {
-    Promise.all([listApprovalMatrices(true), listLetterTypes(true)])
+    queueMicrotask(() => setLoading(true));
+    Promise.all([
+      listApprovalMatrices({ includeInactive: true, page }),
+      listAllLetterTypes(true),
+    ])
       .then(([matrixData, typeData]) => {
-        setMatrices(matrixData.approval_matrices);
-        setLetterTypes(typeData.letter_types);
+        setMatrices(matrixData.data);
+        setMeta(matrixData.meta);
+        setLetterTypes(typeData.data);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat matrix approval"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   const activeCount = useMemo(
     () => matrices.filter((item) => item.is_active).length,
@@ -356,6 +366,14 @@ export default function ApprovalMatricesPage() {
                   })}
               </tbody>
             </table>
+          </div>
+          <div className="px-4">
+            <Pagination
+              page={page}
+              totalPages={meta?.total_pages ?? 1}
+              onPageChange={setPage}
+              disabled={loading}
+            />
           </div>
         </div>
       </main>

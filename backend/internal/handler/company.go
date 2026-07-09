@@ -73,16 +73,29 @@ func (h *Handler) ListCompanies(c *gin.Context) {
 		}
 	}
 
-	query := `
-		SELECT id::text, code, name, is_active, letterhead_config
-		FROM companies`
-	if !includeInactive {
-		query += ` WHERE is_active`
+	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "page atau page_size tidak valid"})
+		return
 	}
-	query += ` ORDER BY code`
+
+	whereClause := ""
+	if !includeInactive {
+		whereClause = ` WHERE is_active`
+	}
 
 	ctx := c.Request.Context()
-	rows, err := h.DB.Query(ctx, query)
+	var total int64
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM companies`+whereClause).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung perusahaan"})
+		return
+	}
+
+	query := `
+		SELECT id::text, code, name, is_active, letterhead_config
+		FROM companies` + whereClause + ` ORDER BY code LIMIT $1 OFFSET $2`
+
+	rows, err := h.DB.Query(ctx, query, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat perusahaan"})
 		return
@@ -123,7 +136,7 @@ func (h *Handler) ListCompanies(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"companies": companies})
+	c.JSON(http.StatusOK, gin.H{"data": companies, "meta": newPageMeta(page, pageSize, total)})
 }
 
 type companyRequest struct {
