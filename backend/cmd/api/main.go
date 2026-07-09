@@ -33,9 +33,12 @@ func main() {
 	}
 	defer st.Close()
 
+	router, h := server.NewRouter(cfg, st)
+	go h.RunSLAWatcher(ctx) // reminder 50% SLA + eskalasi saat terlewati
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
-		Handler:           server.NewRouter(cfg, st),
+		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

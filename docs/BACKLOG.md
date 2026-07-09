@@ -37,7 +37,7 @@
 |----|--------|-----------|----|
 | E01-1 | Login email/NIK + password, kebijakan kekuatan, lockout 5× gagal | Sesuai P0-10 | 5 |
 | E01-2 | Manajemen sesi: JWT/refresh token, timeout, logout semua perangkat | | 3 |
-| E01-3 | CRUD struktur organisasi hierarkis (Direktorat→Biro→Dept→Section→Division) + atribut lokasi (HO/Reg I/Reg II/Rep. Office) | Snapshot versi struktur; Rev. 8 ter-input penuh | 8 |
+| E01-3 | CRUD struktur organisasi hierarkis (Direktorat→Biro→Dept→Division) + atribut lokasi (HO/Reg I/Reg II/Rep. Office) | Snapshot versi struktur; struktur aktif ter-input penuh | 8 |
 | E01-4 | Master jabatan & penempatan pengguna→jabatan (dukung rangkap/Plt) | Mutasi pegawai tidak mengubah surat historis | 5 |
 | E01-5 | RBAC: role Pembuat/Approver/Sekretaris/Auditor/Admin + permission matrix | Uji akses negatif otomatis | 5 |
 | E01-6 | Import pengguna via Excel + validasi & report error per baris | 500 baris < 1 menit | 3 |
@@ -51,7 +51,7 @@
 | E02-1 | Master jenis surat (8 jenis awal PRD §7.1) + klasifikasi default | Admin dapat CRUD | 3 |
 | E02-2 | Engine template: kop per perusahaan, placeholder field, posisi ttd & QR | Template Nota Dinas & Memo jadi acuan | 8 |
 | E02-3 | Composer surat (rich text terbatas: heading, list, tabel, bold/italic) | Autosave 30 dtk; validasi field wajib | 8 |
-| E02-4 | Pemilih penerima To/CC berbasis jabatan/unit dengan pencarian | Multi-penerima; broadcast ke unit | 5 |
+| E02-4 | Pemilih penerima To/CC berbasis jabatan/unit dengan pencarian | Multi-penerima; broadcast ke unit; lintas direktorat hanya untuk pembuat `dept_head+` dan wajib target jabatan | 5 |
 | E02-5 | Upload lampiran multi-file (25 MB/file, whitelist tipe, scan antivirus) | | 5 |
 | E02-6 | Preview & render PDF final + QR verifikasi | PDF pixel-perfect vs template resmi | 8 |
 | E02-7 | Halaman verifikasi QR publik-terbatas (metadata + status keaslian) | Scan QR → info surat tanpa isi konten | 3 |

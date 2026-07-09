@@ -1,20 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createLetterType,
   deactivateLetterType,
-  getAccessToken,
-  getMe,
   listLetterTypes,
-  logout,
   updateLetterType,
   type LetterType,
   type LetterTypePayload,
-  type User,
 } from "@/lib/api";
+import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 
 const CLASSIFICATION_LABEL: Record<LetterType["default_classification"], string> = {
   biasa: "Biasa",
@@ -68,7 +64,7 @@ function compactPayload(form: LetterTypeFormState): LetterTypePayload {
 
 export default function LetterTypesPage() {
   const router = useRouter();
-  const [me, setMe] = useState<User | null>(null);
+  const me = useCurrentUser();
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -84,25 +80,21 @@ export default function LetterTypesPage() {
     setLetterTypes(data.letter_types);
   }
 
+  // Halaman khusus admin — alihkan role lain setelah profil termuat.
   useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/login");
-      return;
+    if (me && !me.roles.includes("admin")) {
+      router.replace("/organization");
     }
-    Promise.all([getMe(), listLetterTypes(true)])
-      .then(([user, data]) => {
-        if (!user.roles.includes("admin")) {
-          router.replace("/organization");
-          return;
-        }
-        setMe(user);
-        setLetterTypes(data.letter_types);
-      })
+  }, [me, router]);
+
+  useEffect(() => {
+    listLetterTypes(true)
+      .then((data) => setLetterTypes(data.letter_types))
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat jenis surat"),
       )
       .finally(() => setLoading(false));
-  }, [router]);
+  }, []);
 
   const activeCount = useMemo(
     () => letterTypes.filter((item) => item.is_active).length,
@@ -189,56 +181,8 @@ export default function LetterTypesPage() {
     }
   }
 
-  async function handleLogout() {
-    await logout();
-    router.replace("/login");
-  }
-
   return (
-    <div className="flex min-h-screen flex-1 flex-col bg-[#f5f7fa] text-[#172033] dark:bg-zinc-950 dark:text-zinc-50">
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-700 text-sm font-bold text-white">
-              e
-            </div>
-            <span className="font-semibold text-zinc-900 dark:text-zinc-50">
-              eOffice Pro
-            </span>
-          </div>
-          <nav className="flex gap-4 text-sm">
-            <Link
-              href="/organization"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Organisasi
-            </Link>
-            <Link
-              href="/users"
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              Pengguna
-            </Link>
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Jenis Surat
-            </span>
-          </nav>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          {me && (
-            <span className="hidden text-zinc-600 dark:text-zinc-400 sm:inline">
-              {me.full_name}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Keluar
-          </button>
-        </div>
-      </header>
-
+    <>
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -251,7 +195,7 @@ export default function LetterTypesPage() {
           </div>
           <button
             onClick={openCreate}
-            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800"
+            className="rounded-lg bg-navy-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800"
           >
             Tambah Jenis Surat
           </button>
@@ -411,7 +355,7 @@ export default function LetterTypesPage() {
                   }
                   required
                   maxLength={5}
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal uppercase text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal uppercase text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -427,7 +371,7 @@ export default function LetterTypesPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200 sm:col-span-2">
@@ -440,7 +384,7 @@ export default function LetterTypesPage() {
                     )
                   }
                   required
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -458,7 +402,7 @@ export default function LetterTypesPage() {
                         : current,
                     )
                   }
-                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 >
                   <option value="biasa">Biasa</option>
                   <option value="terbatas">Terbatas</option>
@@ -474,7 +418,7 @@ export default function LetterTypesPage() {
                       current ? { ...current, is_active: e.target.checked } : current,
                     )
                   }
-                  className="h-4 w-4 rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
+                  className="h-4 w-4 rounded border-zinc-300 text-navy-700 focus:ring-navy-600"
                 />
                 Aktif
               </label>
@@ -501,7 +445,7 @@ export default function LetterTypesPage() {
               <button
                 type="submit"
                 disabled={busy}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg bg-navy-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy ? "Menyimpan..." : "Simpan"}
               </button>
@@ -509,6 +453,6 @@ export default function LetterTypesPage() {
           </form>
         </div>
       )}
-    </div>
+    </>
   );
 }

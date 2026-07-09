@@ -12,6 +12,21 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Palet brand eOffice Pro — navy korporat + aksen cyan (dipakai dashboard). */
+@theme {
+  --color-navy-50: #f0f4fb;
+  --color-navy-100: #dce5f5;
+  --color-navy-200: #b9cbe8;
+  --color-navy-300: #8aa6d4;
+  --color-navy-400: #5b7db3;
+  --color-navy-500: #375d97;
+  --color-navy-600: #24467e;
+  --color-navy-700: #1a3563;
+  --color-navy-800: #12274c;
+  --color-navy-900: #0c1c3a;
+  --color-navy-950: #07122a;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
@@ -23,4 +38,79 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+.tiptap-editor .ProseMirror p {
+  margin: 0.55rem 0;
+}
+
+.tiptap-editor .ProseMirror h1,
+.tiptap-editor .ProseMirror h2,
+.tiptap-editor .ProseMirror h3,
+.tiptap-editor .ProseMirror h4,
+.tiptap-editor .ProseMirror h5,
+.tiptap-editor .ProseMirror h6 {
+  font-weight: 700;
+  margin: 1rem 0 0.45rem;
+}
+
+.tiptap-editor .ProseMirror h1 {
+  font-size: 1.45rem;
+}
+
+.tiptap-editor .ProseMirror h2 {
+  font-size: 1.25rem;
+}
+
+.tiptap-editor .ProseMirror h3 {
+  font-size: 1.1rem;
+}
+
+.tiptap-editor .ProseMirror ul,
+.tiptap-editor .ProseMirror ol {
+  margin: 0.65rem 0;
+  padding-left: 1.5rem;
+}
+
+.tiptap-editor .ProseMirror ul {
+  list-style: disc;
+}
+
+.tiptap-editor .ProseMirror ol {
+  list-style: decimal;
+}
+
+.tiptap-editor .ProseMirror blockquote {
+  border-left: 3px solid #d4d4d8;
+  color: #52525b;
+  margin: 0.9rem 0;
+  padding-left: 1rem;
+}
+
+.tiptap-editor .ProseMirror table {
+  border-collapse: collapse;
+  margin: 0.85rem 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.tiptap-editor .ProseMirror th,
+.tiptap-editor .ProseMirror td {
+  border: 1px solid #d4d4d8;
+  min-width: 4rem;
+  padding: 0.45rem 0.55rem;
+  vertical-align: top;
+}
+
+.tiptap-editor .ProseMirror th {
+  background: #f4f4f5;
+  font-weight: 700;
+}
+
+.tiptap-editor .ProseMirror .is-empty::before {
+  color: #a1a1aa;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
 }

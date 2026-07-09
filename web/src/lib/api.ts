@@ -43,6 +43,65 @@ function setTokens(access: string, refresh: string) {
   localStorage.setItem(REFRESH_KEY, refresh);
 }
 
+function apiError(data: unknown): string | null {
+  if (!data || typeof data !== "object" || !("error" in data)) return null;
+  const error = (data as { error: unknown }).error;
+  return typeof error === "string" ? error : null;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function parseAPIResponse<T>(
+  res: Response,
+  fallbackMessage: string,
+): Promise<T> {
+  const text = await res.text();
+  const snippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
+
+  if (!text) {
+    if (!res.ok) {
+      throw new ApiError(`${fallbackMessage} (${res.status})`, res.status);
+    }
+    return {} as T;
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (!res.ok) {
+      throw new ApiError(
+        snippet
+          ? `${fallbackMessage} (${res.status}): ${snippet}`
+          : `${fallbackMessage} (${res.status})`,
+        res.status,
+      );
+    }
+    throw new ApiError(
+      snippet
+        ? `Respons API tidak valid (${res.status}): ${snippet}`
+        : `Respons API tidak valid (${res.status})`,
+      res.status,
+    );
+  }
+
+  if (!res.ok) {
+    throw new ApiError(
+      apiError(data) ?? `${fallbackMessage} (${res.status})`,
+      res.status,
+    );
+  }
+  return data as T;
+}
+
 export function clearTokens() {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
@@ -54,10 +113,13 @@ export async function login(identifier: string, password: string): Promise<User>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ identifier, password }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Login gagal");
+  const data = await parseAPIResponse<{
+    access_token: string;
+    refresh_token: string;
+    user: User;
+  }>(res, "Login gagal");
   setTokens(data.access_token, data.refresh_token);
-  return data.user as User;
+  return data.user;
 }
 
 export async function logout() {
@@ -84,7 +146,10 @@ async function tryRefresh(): Promise<boolean> {
     clearTokens();
     return false;
   }
-  const data = await res.json();
+  const data = await parseAPIResponse<{ access_token: string; refresh_token: string }>(
+    res,
+    "Refresh sesi gagal",
+  );
   setTokens(data.access_token, data.refresh_token);
   return true;
 }
@@ -110,17 +175,156 @@ export async function apiFetch<T>(
   if (res.status === 401) {
     clearTokens();
     if (typeof window !== "undefined") window.location.href = "/login";
-    throw new Error("Sesi berakhir, silakan login ulang");
+    throw new ApiError("Sesi berakhir, silakan login ulang", res.status);
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `Permintaan gagal (${res.status})`);
-  return data as T;
+  return parseAPIResponse<T>(res, "Permintaan gagal");
 }
 
 export const getMe = () => apiFetch<User>("/auth/me");
 export const getOrgTree = () =>
   apiFetch<{ tree: OrgUnit[]; total: number }>("/org-units");
+
+export interface Position {
+  id: string;
+  title: string;
+  position_type: string;
+  is_approver: boolean;
+  is_active: boolean;
+  reports_to: string | null;
+  reports_to_title: string;
+  org_unit_id: string;
+  org_unit_name: string;
+  org_unit_level: string;
+  holder_name: string;
+  holder_user_id: string;
+  identity_locked: boolean;
+}
+
+export interface PositionPayload {
+  org_unit_id: string;
+  title: string;
+  position_type: string;
+  reports_to: string | null;
+  is_approver: boolean;
+}
+
+export interface PositionDeactivationImpact {
+  active_assignments: number;
+  active_subordinates: number;
+  active_delegations: number;
+  active_drafts: number;
+  active_approvals: number;
+  active_dispositions: number;
+  can_deactivate: boolean;
+}
+
+export const listPositions = (includeInactive = false) =>
+  apiFetch<{ positions: Position[] }>(
+    `/positions${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export const createPosition = (payload: PositionPayload) =>
+  apiFetch<{ id: string }>("/positions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updatePosition = (id: string, payload: PositionPayload) =>
+  apiFetch<{ id: string }>(`/positions/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const getPositionDeactivationImpact = (id: string) =>
+  apiFetch<{ impact: PositionDeactivationImpact }>(
+    `/positions/${id}/deactivation-impact`,
+  );
+
+export const deactivatePosition = (id: string) =>
+  apiFetch<{ id: string }>(`/positions/${id}`, { method: "DELETE" });
+
+export const activatePosition = (id: string) =>
+  apiFetch<{ id: string }>(`/positions/${id}/activate`, { method: "POST" });
+
+export interface AssignPositionPayload {
+  user_id: string;
+  assignment_type?: "definitive" | "plt" | "plh";
+}
+
+export const assignPosition = (positionID: string, payload: AssignPositionPayload) =>
+  apiFetch<{ id: string }>(`/positions/${positionID}/assign`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const endUserPositionAssignment = (assignmentID: string) =>
+  apiFetch<{ id: string }>(`/user-positions/${assignmentID}`, {
+    method: "DELETE",
+  });
+
+export interface Company {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  has_logo: boolean;
+  logo?: {
+    mime_type: "image/png" | "image/jpeg";
+    file_name: string;
+    checksum_sha256: string;
+    width: number;
+    height: number;
+  };
+  logo_url?: string;
+}
+
+export const listCompanies = (includeInactive = false) =>
+  apiFetch<{ companies: Company[] }>(
+    `/companies${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export interface CompanyPayload {
+  code: string;
+  name: string;
+  is_active?: boolean;
+}
+
+export const createCompany = (payload: CompanyPayload) =>
+  apiFetch<{ id: string }>("/companies", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateCompany = (companyID: string, payload: CompanyPayload) =>
+  apiFetch<{ id: string }>(`/companies/${companyID}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deactivateCompany = (companyID: string) =>
+  apiFetch<{ id: string }>(`/companies/${companyID}`, {
+    method: "DELETE",
+  });
+
+export async function uploadCompanyLogo(
+  companyID: string,
+  file: File,
+): Promise<{ id: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/companies/${companyID}/logo`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
+    body: form,
+  });
+  return parseAPIResponse<{ id: string }>(res, "Upload logo perusahaan gagal");
+}
+
+export const deleteCompanyLogo = (companyID: string) =>
+  apiFetch<{ id: string }>(`/companies/${companyID}/logo`, {
+    method: "DELETE",
+  });
 
 // ---- Master jenis surat ----
 
@@ -161,6 +365,490 @@ export const updateLetterType = (id: string, payload: LetterTypePayload) =>
 export const deactivateLetterType = (id: string) =>
   apiFetch<{ id: string }>(`/letter-types/${id}`, { method: "DELETE" });
 
+// ---- Template surat ----
+
+export interface LetterTemplate {
+  id: string;
+  letter_type_id: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  version: number;
+  layout_config: Record<string, unknown>;
+  body_skeleton: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface LetterTemplatePayload {
+  letter_type_id: string;
+  company_id: string;
+  version?: number;
+  layout_config: Record<string, unknown>;
+  body_skeleton: string;
+  is_active?: boolean;
+}
+
+export const listLetterTemplates = (includeInactive = false) =>
+  apiFetch<{ letter_templates: LetterTemplate[] }>(
+    `/letter-templates${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export const createLetterTemplate = (payload: LetterTemplatePayload) =>
+  apiFetch<{ id: string }>("/letter-templates", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateLetterTemplate = (id: string, payload: LetterTemplatePayload) =>
+  apiFetch<{ id: string }>(`/letter-templates/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const activateLetterTemplate = (id: string) =>
+  apiFetch<{ id: string }>(`/letter-templates/${id}/activate`, { method: "POST" });
+
+export const deactivateLetterTemplate = (id: string) =>
+  apiFetch<{ id: string }>(`/letter-templates/${id}`, { method: "DELETE" });
+
+// ---- Matrix approval ----
+
+export type ApprovalMatrixPositionLevel =
+  | "president_director"
+  | "vp_director"
+  | "director"
+  | "gm"
+  | "dept_head"
+  | "sub_dept_head"
+  | "division_head"
+  | "assistant"
+  | "secretary"
+  | "staff"
+  | "auditor";
+
+export type ApprovalMatrixFinalLevel =
+  | "president_director"
+  | "vp_director"
+  | "director"
+  | "gm"
+  | "dept_head"
+  | "sub_dept_head"
+  | "division_head";
+
+export interface ApprovalMatrix {
+  id: string;
+  letter_type_id: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  originator_level: ApprovalMatrixPositionLevel | null;
+  final_level: ApprovalMatrixFinalLevel;
+  flow_mode: "serial";
+  is_active: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface ApprovalMatrixPayload {
+  letter_type_id: string;
+  originator_level?: ApprovalMatrixPositionLevel | null;
+  final_level: ApprovalMatrixFinalLevel;
+  flow_mode?: "serial";
+  is_active?: boolean;
+}
+
+export const listApprovalMatrices = (includeInactive = false) =>
+  apiFetch<{ approval_matrices: ApprovalMatrix[] }>(
+    `/approval-matrices${includeInactive ? "?include_inactive=true" : ""}`,
+  );
+
+export const createApprovalMatrix = (payload: ApprovalMatrixPayload) =>
+  apiFetch<{ id: string }>("/approval-matrices", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateApprovalMatrix = (id: string, payload: ApprovalMatrixPayload) =>
+  apiFetch<{ id: string }>(`/approval-matrices/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deactivateApprovalMatrix = (id: string) =>
+  apiFetch<{ id: string }>(`/approval-matrices/${id}`, { method: "DELETE" });
+
+// ---- Draft surat ----
+
+export interface DraftLetter {
+  id: string;
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  letter_type_id: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  letter_number: string | null;
+  subject: string;
+  classification: LetterType["default_classification"];
+  priority: "normal" | "urgent";
+  status:
+    | "draft"
+    | "submitted"
+    | "in_approval"
+    | "revision"
+    | "approved"
+    | "published"
+    | "cancelled"
+    | "archived";
+  creator_position_id: string;
+  creator_position_title: string;
+  on_behalf_of_position_id: string | null;
+  on_behalf_of_title: string | null;
+  version: number;
+  body_html: string;
+  body_plain: string;
+  recipients: DraftRecipient[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftRecipient {
+  type: "to" | "cc";
+  target_type: "position" | "org_unit";
+  target_id: string;
+  label: string;
+}
+
+export interface DraftLetterPayload {
+  company_id: string;
+  letter_type_id: string;
+  creator_position_id: string;
+  on_behalf_of_position_id?: string | null;
+  subject: string;
+  classification?: LetterType["default_classification"];
+  priority: DraftLetter["priority"];
+  body_html: string;
+  recipients: Omit<DraftRecipient, "label">[];
+}
+
+export const listDraftLetters = () =>
+  apiFetch<{ letters: DraftLetter[] }>("/letters/drafts");
+
+export const listMyLetters = () => apiFetch<{ letters: DraftLetter[] }>("/letters/mine");
+
+export const getDraftLetter = (id: string) =>
+  apiFetch<{ letter: DraftLetter }>(`/letters/drafts/${id}`);
+
+export const createDraftLetter = (payload: DraftLetterPayload) =>
+  apiFetch<{ id: string; version: number }>("/letters/drafts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateDraftLetter = (id: string, payload: DraftLetterPayload) =>
+  apiFetch<{ id: string; version: number }>(`/letters/drafts/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export interface LetterAttachment {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_key: string;
+  checksum_sha256: string;
+  scan_status: "pending" | "clean" | "infected" | "failed";
+  download_url?: string;
+  created_at: string;
+}
+
+export interface DraftPreviewResult {
+  storage_key: string;
+  preview_url: string;
+  expires_in: number;
+}
+
+export interface SubmitDraftResult {
+  id: string;
+  status: "in_approval";
+  approval_cycle: number;
+  qr_token: string;
+  verify_url: string;
+  approval_steps: {
+    step_order: number;
+    flow_group: number;
+    position_id: string;
+    position_type: string;
+    title: string;
+  }[];
+}
+
+export const listDraftAttachments = (id: string) =>
+  apiFetch<{ attachments: LetterAttachment[] }>(`/letters/drafts/${id}/attachments`);
+
+export async function uploadDraftAttachment(
+  id: string,
+  file: File,
+): Promise<{ id: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/letters/drafts/${id}/attachments`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
+    body: form,
+  });
+  return parseAPIResponse<{ id: string }>(res, "Upload lampiran gagal");
+}
+
+export const deleteDraftAttachment = (draftID: string, attachmentID: string) =>
+  apiFetch<{ id: string }>(`/letters/drafts/${draftID}/attachments/${attachmentID}`, {
+    method: "DELETE",
+  });
+
+export const previewDraftLetter = (id: string) =>
+  apiFetch<DraftPreviewResult>(`/letters/drafts/${id}/preview`, { method: "POST" });
+
+export const submitDraftLetter = (id: string) =>
+  apiFetch<SubmitDraftResult>(`/letters/drafts/${id}/submit`, { method: "POST" });
+
+// ---- Inbox surat masuk ----
+
+export interface IncomingLetter {
+  id: string;
+  recipient_type: "to" | "cc";
+  company_code: string;
+  letter_type_code: string;
+  letter_number: string | null;
+  subject: string;
+  classification: DraftLetter["classification"];
+  priority: DraftLetter["priority"];
+  creator_name: string;
+  creator_position_title: string;
+  body_plain: string;
+  attachment_count: number;
+  is_read: boolean;
+  first_read_at: string | null;
+  last_read_at: string | null;
+  delivered_at: string | null;
+  published_at: string | null;
+  updated_at: string;
+}
+
+export const listIncomingLetters = (box?: "to" | "cc") =>
+  apiFetch<{ letters: IncomingLetter[] }>(
+    `/letters/inbox${box ? `?box=${box}` : ""}`,
+  );
+
+// ---- Approval surat ----
+
+export interface ApprovalInboxItem {
+  step_id: string;
+  letter_id: string;
+  step_order: number;
+  status: "waiting";
+  subject: string;
+  priority: DraftLetter["priority"];
+  classification: DraftLetter["classification"];
+  letter_type_code: string;
+  company_code: string;
+  position_title: string;
+  creator_name: string;
+  creator_position: string;
+  body_plain: string;
+  attachment_count: number;
+  updated_at: string;
+}
+
+export interface ApprovalActionPayload {
+  action: "approve" | "reject" | "request_revision";
+  note?: string;
+  client_action_id?: string;
+  device_info?: string;
+}
+
+export interface ApprovalActionResult {
+  letter_id: string;
+  status: DraftLetter["status"];
+}
+
+export const listApprovalInbox = () =>
+  apiFetch<{ approvals: ApprovalInboxItem[] }>("/approvals/inbox");
+
+export const actApprovalStep = (stepID: string, payload: ApprovalActionPayload) =>
+  apiFetch<ApprovalActionResult>(`/approvals/steps/${stepID}/actions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+// ---- Disposisi ----
+
+export type DispositionStatus = "open" | "in_progress" | "done";
+
+export interface DispositionRecipient {
+  id: string;
+  position_id: string;
+  position_title: string;
+  holder_name: string;
+  status: DispositionStatus;
+  followup_note: string | null;
+  completed_at: string | null;
+}
+
+export interface DispositionItem {
+  id: string;
+  letter_id: string;
+  parent_disposition_id: string | null;
+  from_position_id: string;
+  from_position_title: string;
+  creator_name: string;
+  instruction: string;
+  due_date: string | null;
+  created_at: string;
+  recipients: DispositionRecipient[];
+}
+
+export interface DispositionInboxItem {
+  recipient_id: string;
+  disposition_id: string;
+  letter_id: string;
+  letter_subject: string;
+  letter_number: string | null;
+  from_position_title: string;
+  creator_name: string;
+  my_position_title: string;
+  instruction: string;
+  due_date: string | null;
+  status: DispositionStatus;
+  followup_note: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface CreateDispositionPayload {
+  from_position_id: string;
+  instruction: string;
+  due_date?: string | null;
+  parent_disposition_id?: string | null;
+  recipient_position_ids: string[];
+}
+
+export interface UpdateDispositionStatusPayload {
+  status: "in_progress" | "done";
+  followup_note?: string;
+}
+
+export const listLetterDispositions = (letterID: string) =>
+  apiFetch<{ dispositions: DispositionItem[] }>(
+    `/letters/view/${letterID}/dispositions`,
+  );
+
+export const createDisposition = (
+  letterID: string,
+  payload: CreateDispositionPayload,
+) =>
+  apiFetch<{ id: string }>(`/letters/view/${letterID}/dispositions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const listDispositionInbox = () =>
+  apiFetch<{ dispositions: DispositionInboxItem[] }>("/dispositions/inbox");
+
+export const updateDispositionStatus = (
+  recipientID: string,
+  payload: UpdateDispositionStatusPayload,
+) =>
+  apiFetch<{ id: string; status: DispositionStatus }>(
+    `/dispositions/recipients/${recipientID}/status`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+
+// ---- Detail surat ----
+
+export interface LetterApprovalStep {
+  id: string;
+  approval_cycle: number;
+  step_order: number;
+  flow_group: number;
+  status: "pending" | "waiting" | "approved" | "rejected" | "skipped";
+  position_title: string;
+  position_type: string;
+  sla_deadline: string | null;
+  decided_at: string | null;
+}
+
+export interface LetterApprovalAction {
+  id: string;
+  step_id: string;
+  action: "approve" | "reject" | "request_revision";
+  actor_name: string;
+  note: string | null;
+  device_info: string | null;
+  created_at: string;
+  position_title: string;
+}
+
+export interface LetterDetail {
+  id: string;
+  company_code: string;
+  company_name: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  letter_number: string | null;
+  subject: string;
+  classification: string;
+  priority: DraftLetter["priority"];
+  status: DraftLetter["status"];
+  creator_name: string;
+  creator_position_title: string;
+  on_behalf_of_title: string | null;
+  version: number;
+  body_html: string;
+  body_plain: string;
+  qr_token: string | null;
+  verify_url: string | null;
+  final_pdf_url: string | null;
+  recipients: DraftRecipient[];
+  attachments: LetterAttachment[];
+  approval_steps: LetterApprovalStep[];
+  approval_actions: LetterApprovalAction[];
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+}
+
+export const getLetterDetail = (id: string) =>
+  apiFetch<{ letter: LetterDetail }>(`/letters/view/${id}`);
+
+export interface VerifiedLetter {
+  id: string;
+  company_code: string;
+  company_name: string;
+  letter_type_code: string;
+  letter_type_name: string;
+  letter_number: string | null;
+  subject: string;
+  classification: string;
+  status: string;
+  published_at: string | null;
+  created_at: string;
+}
+
+export async function verifyLetter(token: string): Promise<VerifiedLetter> {
+  const res = await fetch(`${BASE}/verify/${encodeURIComponent(token)}`);
+  const data = await parseAPIResponse<{ letter: VerifiedLetter }>(
+    res,
+    "Token verifikasi tidak valid",
+  );
+  return data.letter;
+}
+
 // ---- Reset password (publik) ----
 
 export async function forgotPassword(email: string): Promise<string> {
@@ -169,9 +857,8 @@ export async function forgotPassword(email: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Permintaan gagal");
-  return data.message as string;
+  const data = await parseAPIResponse<{ message: string }>(res, "Permintaan gagal");
+  return data.message;
 }
 
 export async function resetPassword(
@@ -183,9 +870,100 @@ export async function resetPassword(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token, new_password: newPassword }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Reset password gagal");
-  return data.message as string;
+  const data = await parseAPIResponse<{ message: string }>(res, "Reset password gagal");
+  return data.message;
+}
+
+// ---- Pencarian surat ----
+
+export interface LetterSearchResult {
+  id: string;
+  company_code: string;
+  letter_type_code: string;
+  letter_number: string | null;
+  subject: string;
+  status: string;
+  classification: string;
+  creator_name: string;
+  origin: "mine" | "received";
+  snippet: string;
+  published_at: string | null;
+  updated_at: string;
+}
+
+export const searchLetters = (query: string) =>
+  apiFetch<{ results: LetterSearchResult[]; query: string }>(
+    `/letters/search?q=${encodeURIComponent(query)}`,
+  );
+
+// ---- Dashboard ----
+
+export interface DashboardSummary {
+  stats: {
+    inbox_unread: number;
+    sent_this_month: number;
+    pending_approvals: number;
+    archived_total: number;
+  };
+  incoming_trend: { date: string; total: number }[];
+  recent_activities: {
+    id: string;
+    event_type: string;
+    title: string;
+    created_at: string;
+  }[];
+  pending_approvals: {
+    step_id: string;
+    subject: string;
+    creator_name: string;
+    updated_at: string;
+  }[];
+}
+
+export const getDashboardSummary = () =>
+  apiFetch<DashboardSummary>("/dashboard/summary");
+
+// ---- Notifikasi in-app ----
+
+export interface AppNotification {
+  id: string;
+  event_type: "approval_waiting" | "approval_result" | "letter_incoming" | string;
+  letter_id: string | null;
+  title: string;
+  body: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export const listNotifications = (limit = 15) =>
+  apiFetch<{ notifications: AppNotification[]; unread_count: number }>(
+    `/notifications?limit=${limit}`,
+  );
+
+export const markNotificationRead = (id: string) =>
+  apiFetch<{ id: string; updated: boolean }>(`/notifications/${id}/read`, {
+    method: "POST",
+  });
+
+export const markAllNotificationsRead = () =>
+  apiFetch<{ marked_read: number }>("/notifications/read-all", {
+    method: "POST",
+  });
+
+// ---- Ubah password (pengguna login) ----
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<string> {
+  const data = await apiFetch<{ message: string }>("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  return data.message;
 }
 
 // ---- Manajemen pengguna (admin) ----
@@ -197,6 +975,18 @@ export interface UserRow {
   full_name: string;
   status: string;
   roles: string[];
+  positions: UserPositionAssignment[];
+}
+
+export interface UserPositionAssignment {
+  assignment_id: string;
+  position_id: string;
+  title: string;
+  position_type: string;
+  org_unit_name: string;
+  assignment_type: "definitive" | "plt" | "plh";
+  valid_from: string;
+  valid_to: string | null;
 }
 
 export interface UserPayload {
@@ -206,6 +996,50 @@ export interface UserPayload {
   status: "active" | "inactive" | "locked";
   roles: string[];
   password?: string;
+  positions: UserPositionPayload[];
+}
+
+export interface UserPositionPayload {
+  position_id: string;
+  assignment_type: "definitive" | "plt" | "plh";
+}
+
+export interface DeactivationImpact {
+  positions: {
+    position_id: string;
+    title: string;
+    org_unit_name: string;
+    assignment_type: UserPositionPayload["assignment_type"];
+  }[];
+  drafts: {
+    letter_id: string;
+    subject: string;
+    creator_position_id: string;
+    creator_position_title: string;
+    status: string;
+  }[];
+  approval_steps: {
+    step_id: string;
+    letter_id: string;
+    subject: string;
+    position_id: string;
+    position_title: string;
+    status: string;
+  }[];
+  has_impact: boolean;
+}
+
+export interface DeactivateUserPayload {
+  position_replacements: {
+    position_id: string;
+    replacement_user_id: string;
+    assignment_type: UserPositionPayload["assignment_type"];
+  }[];
+  draft_transfers: {
+    letter_id: string;
+    replacement_user_id: string;
+    replacement_position_id: string;
+  }[];
 }
 
 export interface ImportResult {
@@ -228,8 +1062,16 @@ export const updateUser = (id: string, payload: UserPayload) =>
     body: JSON.stringify(payload),
   });
 
-export const deactivateUser = (id: string) =>
-  apiFetch<{ id: string }>(`/users/${id}`, { method: "DELETE" });
+export const getUserDeactivationImpact = (id: string) =>
+  apiFetch<{ impact: DeactivationImpact }>(`/users/${id}/deactivation-impact`);
+
+export const deactivateUser = (id: string, payload?: DeactivateUserPayload) =>
+  payload
+    ? apiFetch<{ id: string }>(`/users/${id}/deactivate`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+    : apiFetch<{ id: string }>(`/users/${id}`, { method: "DELETE" });
 
 export async function importUsers(file: File): Promise<ImportResult> {
   const form = new FormData();
@@ -240,9 +1082,7 @@ export async function importUsers(file: File): Promise<ImportResult> {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
     body: form,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Import gagal");
-  return data as ImportResult;
+  return parseAPIResponse<ImportResult>(res, "Import gagal");
 }
 
 export async function downloadImportTemplate() {

@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/kskgroup/eofficepro/internal/auth"
@@ -17,15 +18,19 @@ import (
 type Handler struct {
 	DB     *pgxpool.Pool
 	Redis  *redis.Client
+	Minio  *minio.Client
+	Bucket string
 	Cfg    *config.Config
 	Tokens *auth.TokenIssuer
 	Mailer *mail.Mailer
 }
 
-func New(db *pgxpool.Pool, rdb *redis.Client, cfg *config.Config) *Handler {
+func New(db *pgxpool.Pool, rdb *redis.Client, mc *minio.Client, bucket string, cfg *config.Config) *Handler {
 	return &Handler{
 		DB:     db,
 		Redis:  rdb,
+		Minio:  mc,
+		Bucket: bucket,
 		Cfg:    cfg,
 		Tokens: auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTAccessTTLMinutes),
 		Mailer: mail.New(cfg),
