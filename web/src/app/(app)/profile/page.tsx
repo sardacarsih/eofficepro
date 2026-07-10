@@ -11,9 +11,9 @@ import { POSITION_TYPE_LABEL } from "@/lib/position-types";
 const ROLE_LABEL: Record<string, string> = {
   admin: "Admin",
   creator: "Creator",
-  approver: "Approver",
   secretary: "Secretary",
   auditor: "Auditor",
+  management_viewer: "Management Viewer",
 };
 
 const ASSIGNMENT_LABEL: Record<string, string> = {

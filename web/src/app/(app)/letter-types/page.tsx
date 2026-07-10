@@ -31,6 +31,7 @@ interface LetterTypeFormState {
   name: string;
   default_classification: LetterType["default_classification"];
   default_sla_hours: string;
+  electronic_submission_enabled: boolean;
   is_active: boolean;
 }
 
@@ -40,6 +41,7 @@ function emptyForm(): LetterTypeFormState {
     name: "",
     default_classification: "biasa",
     default_sla_hours: "24",
+    electronic_submission_enabled: true,
     is_active: true,
   };
 }
@@ -50,6 +52,7 @@ function letterTypeToForm(letterType: LetterType): LetterTypeFormState {
     name: letterType.name,
     default_classification: letterType.default_classification,
     default_sla_hours: String(letterType.default_sla_hours),
+    electronic_submission_enabled: letterType.electronic_submission_enabled,
     is_active: letterType.is_active,
   };
 }
@@ -60,6 +63,7 @@ function compactPayload(form: LetterTypeFormState): LetterTypePayload {
     name: form.name.trim(),
     default_classification: form.default_classification,
     default_sla_hours: Number(form.default_sla_hours),
+    electronic_submission_enabled: form.electronic_submission_enabled,
     is_active: form.is_active,
   };
 }
@@ -180,6 +184,7 @@ export default function LetterTypesPage() {
         name: letterType.name,
         default_classification: letterType.default_classification,
         default_sla_hours: letterType.default_sla_hours,
+        electronic_submission_enabled: letterType.electronic_submission_enabled,
         is_active: true,
       });
       await reload();
@@ -374,6 +379,17 @@ export default function LetterTypesPage() {
                   maxLength={5}
                   className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal uppercase text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
                 />
+              </label>
+              <label className="flex items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                <input
+                  type="checkbox"
+                  checked={form.electronic_submission_enabled}
+                  onChange={(e) => setForm((current) => current ? {
+                    ...current,
+                    electronic_submission_enabled: e.target.checked,
+                  } : current)}
+                />
+                Izinkan pengajuan elektronik
               </label>
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
                 SLA Default (jam)

@@ -89,7 +89,7 @@ export default function ApprovalsPage() {
   }, [page]);
 
   const canApprove = useMemo(
-    () => me?.roles.some((role) => ["admin", "approver"].includes(role)) ?? false,
+    () => me?.capabilities?.can_approve ?? false,
     [me],
   );
 
@@ -97,8 +97,12 @@ export default function ApprovalsPage() {
     item: ApprovalInboxItem,
     action: ApprovalActionPayload["action"],
   ) {
+    if (action === "approve") {
+      setError("Approval dengan tanda tangan wajib dilakukan dari Android tablet.");
+      return;
+    }
     const note = notes[item.step_id]?.trim() ?? "";
-    if (action !== "approve" && !note) {
+    if (!note) {
       setError("Catatan wajib diisi untuk Tolak atau Minta Revisi.");
       return;
     }
@@ -166,7 +170,7 @@ export default function ApprovalsPage() {
         )}
         {!loading && me && !canApprove && (
           <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
-            Akun ini belum memiliki role approver.
+            Tidak ada approval aktif untuk jabatan Anda.
           </p>
         )}
 
@@ -268,13 +272,17 @@ export default function ApprovalsPage() {
                       Tolak
                     </button>
                     <button
-                      onClick={() => void handleAction(item, "approve")}
-                      disabled={busy || busyStepID !== null}
+                      type="button"
+                      title="Approval dengan tanda tangan wajib dilakukan dari Android tablet."
+                      disabled
                       className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {busy ? "Memproses..." : "Setujui"}
+                      Setujui di Android
                     </button>
                   </div>
+                  <p className="text-xs text-zinc-500 md:col-start-2">
+                    Approval tanda tangan dilakukan dari Android tablet.
+                  </p>
                 </div>
               </article>
             );

@@ -80,7 +80,7 @@ CREATE INDEX idx_user_positions_position ON user_positions(position_id);
 
 CREATE TABLE roles (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    code        varchar(20) NOT NULL UNIQUE,  -- admin, creator, approver, secretary, auditor
+    code        varchar(20) NOT NULL UNIQUE,  -- admin, creator, secretary, auditor
     name        varchar(100) NOT NULL,
     permissions jsonb NOT NULL DEFAULT '[]'
 );
@@ -341,7 +341,6 @@ INSERT INTO companies (code, name) VALUES ('KSK', 'PT Kalimantan Sawit Kusuma');
 INSERT INTO roles (code, name) VALUES
     ('admin',     'Administrator Sistem'),
     ('creator',   'Pembuat Surat'),
-    ('approver',  'Penyetuju'),
     ('secretary', 'Sekretaris'),
     ('auditor',   'Auditor Inspectorate');
 

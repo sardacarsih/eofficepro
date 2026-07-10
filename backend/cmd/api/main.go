@@ -35,6 +35,9 @@ func main() {
 
 	router, h := server.NewRouter(cfg, st)
 	go h.RunSLAWatcher(ctx) // reminder 50% SLA + eskalasi saat terlewati
+	go h.RunAttachmentScanWorker(ctx)
+	go h.RunNotificationOutboxWorker(ctx)
+	go h.RunPublicationOutboxWorker(ctx)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

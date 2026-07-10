@@ -24,6 +24,9 @@ type positionResponse struct {
 	OrgUnitID      string  `json:"org_unit_id"`
 	OrgUnitName    string  `json:"org_unit_name"`
 	OrgUnitLevel   string  `json:"org_unit_level"`
+	CompanyID      string  `json:"company_id"`
+	CompanyCode    string  `json:"company_code"`
+	CompanyName    string  `json:"company_name"`
 	HolderName     string  `json:"holder_name"`
 	HolderUserID   string  `json:"holder_user_id"`
 	IdentityLocked bool    `json:"identity_locked"`
@@ -63,6 +66,7 @@ func (h *Handler) ListPositions(c *gin.Context) {
 		SELECT p.id::text, p.title, p.position_type, p.is_approver,
 		       p.is_active, p.reports_to::text, COALESCE(manager.title, ''),
 		       ou.id::text, ou.name, ou.unit_level,
+		       company.id::text, company.code, company.name,
 		       COALESCE(holder.full_name, ''), COALESCE(holder.user_id, ''),
 		       (
 		           EXISTS (SELECT 1 FROM user_positions up WHERE up.position_id = p.id)
@@ -79,6 +83,7 @@ func (h *Handler) ListPositions(c *gin.Context) {
 		       ) AS identity_locked
 		FROM positions p
 		JOIN org_units ou ON ou.id = p.org_unit_id
+		JOIN companies company ON company.id = ou.company_id
 		LEFT JOIN positions manager ON manager.id = p.reports_to
 		LEFT JOIN LATERAL (
 			SELECT string_agg(u.full_name, ', ' ORDER BY u.full_name) AS full_name,
@@ -107,6 +112,7 @@ func (h *Handler) ListPositions(c *gin.Context) {
 		if err := rows.Scan(&p.ID, &p.Title, &p.PositionType, &p.IsApprover,
 			&p.IsActive, &p.ReportsTo, &p.ReportsToTitle,
 			&p.OrgUnitID, &p.OrgUnitName, &p.OrgUnitLevel,
+			&p.CompanyID, &p.CompanyCode, &p.CompanyName,
 			&p.HolderName, &p.HolderUserID, &p.IdentityLocked); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca data jabatan"})
 			return

@@ -13,6 +13,7 @@ import (
 	"github.com/kskgroup/eofficepro/internal/auth"
 	"github.com/kskgroup/eofficepro/internal/config"
 	"github.com/kskgroup/eofficepro/internal/mail"
+	"github.com/kskgroup/eofficepro/internal/push"
 )
 
 type Handler struct {
@@ -23,6 +24,7 @@ type Handler struct {
 	Cfg    *config.Config
 	Tokens *auth.TokenIssuer
 	Mailer *mail.Mailer
+	Push   *push.Client
 }
 
 func New(db *pgxpool.Pool, rdb *redis.Client, mc *minio.Client, bucket string, cfg *config.Config) *Handler {
@@ -34,6 +36,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, mc *minio.Client, bucket string, c
 		Cfg:    cfg,
 		Tokens: auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTAccessTTLMinutes),
 		Mailer: mail.New(cfg),
+		Push:   push.New(context.Background(), cfg),
 	}
 }
 

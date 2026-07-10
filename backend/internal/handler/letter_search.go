@@ -26,7 +26,7 @@ type letterSearchResult struct {
 	Status         string     `json:"status"`
 	Classification string     `json:"classification"`
 	CreatorName    string     `json:"creator_name"`
-	Origin         string     `json:"origin"` // mine | received
+	Origin         string     `json:"origin"` // mine | received | audit
 	Snippet        string     `json:"snippet"`
 	PublishedAt    *time.Time `json:"published_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -42,17 +42,26 @@ func (h *Handler) SearchLetters(c *gin.Context) {
 	pattern := "%" + escapeLike(query) + "%"
 
 	rows, err := h.DB.Query(c.Request.Context(), `
-		WITH accessible AS (
+		WITH candidates AS (
 			SELECT l.id, 'mine' AS origin
 			FROM letters l
 			WHERE l.creator_user_id = $1
-			UNION
+			UNION ALL
 			SELECT DISTINCT l.id, 'received' AS origin
 			FROM letter_recipients lr
 			JOIN letters l ON l.id = lr.letter_id
 			WHERE l.status = 'published'
 			  AND l.creator_user_id <> $1
-			  AND `+recipientAccessSQL("$1")+`
+			  AND `+publishedRecipientAccessSQL("$1")+`
+			UNION ALL
+			SELECT l.id, 'audit' AS origin
+			FROM letters l
+			WHERE `+auditLetterAccessSQL("$1", "l")+`
+		), accessible AS (
+			SELECT DISTINCT ON (id) id, origin
+			FROM candidates
+			ORDER BY id,
+				CASE origin WHEN 'mine' THEN 1 WHEN 'received' THEN 2 ELSE 3 END
 		)
 		SELECT l.id::text, co.code, lt.code, l.letter_number, l.subject, l.status,
 		       l.classification, u.full_name, a.origin,

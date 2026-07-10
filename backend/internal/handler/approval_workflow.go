@@ -47,10 +47,12 @@ type approvalPosition struct {
 }
 
 type approvalActionRequest struct {
-	Action         string `json:"action"`
-	Note           string `json:"note"`
-	ClientActionID string `json:"client_action_id"`
-	DeviceInfo     string `json:"device_info"`
+	Action               string `json:"action"`
+	Note                 string `json:"note"`
+	ClientActionID       string `json:"client_action_id"`
+	DeviceInfo           string `json:"device_info"`
+	SignatureImageBase64 string `json:"signature_image_base64"`
+	SignatureMIMEType    string `json:"signature_mime_type"`
 }
 
 func lockDraftForSubmit(ctx context.Context, tx pgx.Tx, letterID string, userID string) (draftSubmitSnapshot, error) {
@@ -608,6 +610,15 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alasan wajib diisi untuk tolak atau minta revisi"})
 		return
 	}
+	var signature approvalSignatureImage
+	if req.Action == "approve" {
+		var err error
+		signature, err = validateApprovalSignatureImage(req.SignatureImageBase64, req.SignatureMIMEType)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 
 	ctx := c.Request.Context()
 	tx, err := h.DB.Begin(ctx)
@@ -645,11 +656,46 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 	if clientActionID != "" {
 		clientActionArg = clientActionID
 	}
+
+	var signatureObjectKey string
+	signatureCommitted := false
+	defer func() {
+		if !signatureCommitted && signatureObjectKey != "" && h.Minio != nil {
+			_ = h.Minio.RemoveObject(context.Background(), h.Bucket, signatureObjectKey, minio.RemoveObjectOptions{})
+		}
+	}()
+	var signatureKeyArg any
+	var signatureMIMEArg any
+	var signatureSizeArg any
+	var signatureChecksumArg any
+	if req.Action == "approve" {
+		signatureObjectKey, err = h.putApprovalSignatureObject(ctx, letterID, stepID, clientActionID, signature)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "gagal menyimpan tanda tangan"})
+			return
+		}
+		signatureKeyArg = signatureObjectKey
+		signatureMIMEArg = signature.MIMEType
+		signatureSizeArg = signature.SizeBytes
+		signatureChecksumArg = signature.ChecksumSHA256
+	}
+
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO approval_actions
-			(approval_step_id, action, acted_by_user_id, note, client_action_id, device_info, ip_address)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		stepID, req.Action, userID, nullableString(req.Note), clientActionArg, nullableString(req.DeviceInfo), c.ClientIP()); err != nil {
+			(approval_step_id, action, acted_by_user_id, note, client_action_id, device_info, ip_address,
+			 signature_image_key, signature_mime_type, signature_size_bytes, signature_checksum_sha256)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		stepID,
+		req.Action,
+		userID,
+		nullableString(req.Note),
+		clientActionArg,
+		nullableString(req.DeviceInfo),
+		c.ClientIP(),
+		signatureKeyArg,
+		signatureMIMEArg,
+		signatureSizeArg,
+		signatureChecksumArg); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "aksi approval gagal dicatat atau duplikat"})
 		return
 	}
@@ -664,7 +710,6 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 	}
 
 	letterStatus := "in_approval"
-	var finalPDFKey string
 	var pendingEmails []notificationEmail
 	if req.Action == "approve" {
 		nextStepID, nextOrder, err := promoteNextApprovalStep(ctx, tx, letterID, stepOrder)
@@ -678,39 +723,21 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			publishedAt := time.Now()
-			finalPDFKey, err = h.renderAndStoreFinalPDF(ctx, tx, letterID, letterNumber, publishedAt)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			letterStatus = "published"
+			letterStatus = "approved"
 			if _, err := tx.Exec(ctx, `
 				UPDATE letters
-				SET status = 'published',
+				SET status = 'approved',
 				    letter_number = $2,
-				    final_pdf_key = $3,
 				    current_step_order = NULL,
-				    published_at = $4,
 				    updated_at = now()
-				WHERE id = $1`, letterID, letterNumber, finalPDFKey, publishedAt); err != nil {
-				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
+				WHERE id = $1`, letterID, letterNumber); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyelesaikan approval"})
 				return
 			}
-			incomingEmails, err := distributePublishedLetter(ctx, tx, letterID, publishedAt)
-			if err != nil {
-				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mendistribusikan surat"})
+			if _, err := tx.Exec(ctx, `INSERT INTO letter_publication_jobs (letter_id) VALUES ($1)`, letterID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengantrikan publikasi surat"})
 				return
 			}
-			resultEmails, err := notifyApprovalResult(ctx, tx, letterID, letterStatus)
-			if err != nil {
-				_ = h.Minio.RemoveObject(ctx, h.Bucket, finalPDFKey, minio.RemoveObjectOptions{})
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim notifikasi hasil approval"})
-				return
-			}
-			pendingEmails = append(incomingEmails, resultEmails...)
 		} else {
 			if _, err := tx.Exec(ctx, `
 				UPDATE letters
@@ -751,16 +778,20 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 		}
 	}
 
+	if err := enqueueNotificationOutbox(ctx, tx, pendingEmails); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengantrikan notifikasi approval"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan aksi approval"})
 		return
 	}
+	signatureCommitted = true
 
 	h.audit(ctx, "letter", &letterID, "approval_"+req.Action, &userID, map[string]any{
 		"step_id": stepID,
 		"status":  letterStatus,
 	}, c.ClientIP())
-	h.sendNotificationEmails(pendingEmails)
 	c.JSON(http.StatusOK, gin.H{"letter_id": letterID, "status": letterStatus})
 }
 

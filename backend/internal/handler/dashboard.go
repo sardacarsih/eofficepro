@@ -33,6 +33,7 @@ type dashboardActivity struct {
 
 type dashboardPendingApproval struct {
 	StepID      string    `json:"step_id"`
+	LetterID    string    `json:"letter_id"`
 	Subject     string    `json:"subject"`
 	CreatorName string    `json:"creator_name"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -49,7 +50,7 @@ func (h *Handler) DashboardSummary(c *gin.Context) {
 			FROM letter_recipients lr
 			JOIN letters l ON l.id = lr.letter_id
 			WHERE l.status = 'published'
-			  AND `+recipientAccessSQL("$1")+`
+			  AND `+publishedRecipientAccessSQL("$1")+`
 		)
 		SELECT
 			(SELECT count(*) FROM my_incoming mi
@@ -94,7 +95,7 @@ func (h *Handler) DashboardSummary(c *gin.Context) {
 			JOIN letters l ON l.id = lr.letter_id
 			WHERE l.status = 'published'
 			  AND l.published_at >= current_date - interval '29 days'
-			  AND `+recipientAccessSQL("$1")+`
+			  AND `+publishedRecipientAccessSQL("$1")+`
 		)
 		SELECT d.day::date::text, count(mi.id)
 		FROM generate_series(current_date - interval '29 days', current_date, interval '1 day') AS d(day)
@@ -146,7 +147,7 @@ func (h *Handler) DashboardSummary(c *gin.Context) {
 
 	pending := []dashboardPendingApproval{}
 	pendingRows, err := h.DB.Query(ctx, `
-		SELECT s.id::text, l.subject, u.full_name, l.updated_at
+		SELECT s.id::text, l.id::text, l.subject, u.full_name, l.updated_at
 		FROM approval_steps s
 		JOIN letters l ON l.id = s.letter_id
 		JOIN users u ON u.id = l.creator_user_id
@@ -165,7 +166,7 @@ func (h *Handler) DashboardSummary(c *gin.Context) {
 	defer pendingRows.Close()
 	for pendingRows.Next() {
 		var item dashboardPendingApproval
-		if err := pendingRows.Scan(&item.StepID, &item.Subject, &item.CreatorName, &item.UpdatedAt); err != nil {
+		if err := pendingRows.Scan(&item.StepID, &item.LetterID, &item.Subject, &item.CreatorName, &item.UpdatedAt); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca approval menunggu"})
 			return
 		}

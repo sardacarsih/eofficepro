@@ -10,12 +10,13 @@ import (
 )
 
 type LetterType struct {
-	ID                    string `json:"id"`
-	Code                  string `json:"code"`
-	Name                  string `json:"name"`
-	DefaultClassification string `json:"default_classification"`
-	DefaultSLAHours       int    `json:"default_sla_hours"`
-	IsActive              bool   `json:"is_active"`
+	ID                          string `json:"id"`
+	Code                        string `json:"code"`
+	Name                        string `json:"name"`
+	DefaultClassification       string `json:"default_classification"`
+	DefaultSLAHours             int    `json:"default_sla_hours"`
+	ElectronicSubmissionEnabled bool   `json:"electronic_submission_enabled"`
+	IsActive                    bool   `json:"is_active"`
 }
 
 func (h *Handler) ListLetterTypes(c *gin.Context) {
@@ -39,7 +40,8 @@ func (h *Handler) ListLetterTypes(c *gin.Context) {
 	}
 
 	query := `
-		SELECT id::text, code, name, default_classification, default_sla_hours, is_active
+		SELECT id::text, code, name, default_classification, default_sla_hours,
+		       electronic_submission_enabled, is_active
 		FROM letter_types` + whereSQL + ` ORDER BY code LIMIT $1 OFFSET $2`
 
 	rows, err := h.DB.Query(ctx, query, pageSize, offset)
@@ -52,7 +54,7 @@ func (h *Handler) ListLetterTypes(c *gin.Context) {
 	letterTypes := []LetterType{}
 	for rows.Next() {
 		var lt LetterType
-		if err := rows.Scan(&lt.ID, &lt.Code, &lt.Name, &lt.DefaultClassification, &lt.DefaultSLAHours, &lt.IsActive); err != nil {
+		if err := rows.Scan(&lt.ID, &lt.Code, &lt.Name, &lt.DefaultClassification, &lt.DefaultSLAHours, &lt.ElectronicSubmissionEnabled, &lt.IsActive); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca data jenis surat"})
 			return
 		}
@@ -67,11 +69,12 @@ func (h *Handler) ListLetterTypes(c *gin.Context) {
 }
 
 type letterTypeRequest struct {
-	Code                  string `json:"code" binding:"required,max=5"`
-	Name                  string `json:"name" binding:"required,max=100"`
-	DefaultClassification string `json:"default_classification" binding:"required,oneof=biasa terbatas rahasia"`
-	DefaultSLAHours       int    `json:"default_sla_hours" binding:"required,min=1,max=720"`
-	IsActive              *bool  `json:"is_active"`
+	Code                        string `json:"code" binding:"required,max=5"`
+	Name                        string `json:"name" binding:"required,max=100"`
+	DefaultClassification       string `json:"default_classification" binding:"required,oneof=biasa terbatas rahasia"`
+	DefaultSLAHours             int    `json:"default_sla_hours" binding:"required,min=1,max=720"`
+	ElectronicSubmissionEnabled *bool  `json:"electronic_submission_enabled"`
+	IsActive                    *bool  `json:"is_active"`
 }
 
 func normalizeLetterTypeRequest(req *letterTypeRequest) {
@@ -92,13 +95,17 @@ func (h *Handler) CreateLetterType(c *gin.Context) {
 	if req.IsActive != nil {
 		isActive = *req.IsActive
 	}
+	electronicSubmissionEnabled := true
+	if req.ElectronicSubmissionEnabled != nil {
+		electronicSubmissionEnabled = *req.ElectronicSubmissionEnabled
+	}
 
 	ctx := c.Request.Context()
 	var id string
 	err := h.DB.QueryRow(ctx, `
-		INSERT INTO letter_types (code, name, default_classification, default_sla_hours, is_active)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id::text`,
-		req.Code, req.Name, req.DefaultClassification, req.DefaultSLAHours, isActive).Scan(&id)
+		INSERT INTO letter_types (code, name, default_classification, default_sla_hours, electronic_submission_enabled, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
+		req.Code, req.Name, req.DefaultClassification, req.DefaultSLAHours, electronicSubmissionEnabled, isActive).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "gagal membuat jenis surat (kode mungkin sudah dipakai)"})
 		return
@@ -107,6 +114,7 @@ func (h *Handler) CreateLetterType(c *gin.Context) {
 	actor := c.GetString(middleware.CtxUserID)
 	h.audit(ctx, "letter_type", &id, "create", &actor, map[string]any{
 		"code": req.Code, "name": req.Name, "classification": req.DefaultClassification,
+		"electronic_submission_enabled": electronicSubmissionEnabled,
 	}, c.ClientIP())
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
@@ -124,13 +132,18 @@ func (h *Handler) UpdateLetterType(c *gin.Context) {
 	if req.IsActive != nil {
 		isActive = *req.IsActive
 	}
+	electronicSubmissionEnabled := true
+	if req.ElectronicSubmissionEnabled != nil {
+		electronicSubmissionEnabled = *req.ElectronicSubmissionEnabled
+	}
 
 	ctx := c.Request.Context()
 	tag, err := h.DB.Exec(ctx, `
 		UPDATE letter_types
-		SET code = $2, name = $3, default_classification = $4, default_sla_hours = $5, is_active = $6
+		SET code = $2, name = $3, default_classification = $4, default_sla_hours = $5,
+		    electronic_submission_enabled = $6, is_active = $7
 		WHERE id = $1`,
-		id, req.Code, req.Name, req.DefaultClassification, req.DefaultSLAHours, isActive)
+		id, req.Code, req.Name, req.DefaultClassification, req.DefaultSLAHours, electronicSubmissionEnabled, isActive)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "gagal memperbarui jenis surat (kode mungkin sudah dipakai)"})
 		return
@@ -142,7 +155,8 @@ func (h *Handler) UpdateLetterType(c *gin.Context) {
 
 	actor := c.GetString(middleware.CtxUserID)
 	h.audit(ctx, "letter_type", &id, "update", &actor, map[string]any{
-		"code": req.Code, "name": req.Name, "classification": req.DefaultClassification, "is_active": isActive,
+		"code": req.Code, "name": req.Name, "classification": req.DefaultClassification,
+		"electronic_submission_enabled": electronicSubmissionEnabled, "is_active": isActive,
 	}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"id": id})
 }

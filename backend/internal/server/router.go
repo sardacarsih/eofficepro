@@ -32,11 +32,13 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 		MaxAge:           12 * time.Hour,
 	}
 	if cfg.AppEnv != "production" {
-		// Dev: next dev kadang jalan di port localhost lain (preview/port alternatif).
+		// Dev: next dev kadang jalan di port localhost lain (preview/port alternatif),
+		// dan 10.0.2.2 adalah alias loopback host dari emulator Android.
 		corsCfg.AllowOriginFunc = func(origin string) bool {
 			u, err := url.Parse(origin)
 			return err == nil && u.Scheme == "http" &&
-				(u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")
+				(u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" ||
+					u.Hostname() == "10.0.2.2")
 		}
 	}
 	r.Use(cors.New(corsCfg))
@@ -80,6 +82,8 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 	authed.GET("/letters/search", h.SearchLetters)
 	authed.GET("/letters/mine", h.ListMyLetters)
 	authed.GET("/letters/view/:id", h.GetLetterDetail)
+	authed.GET("/letters/view/:id/final-pdf", h.DownloadFinalLetterPDF)
+	authed.GET("/letters/view/:id/attachments/:attachment_id/download", h.DownloadLetterAttachment)
 	authed.GET("/letters/drafts", h.ListDraftLetters)
 	authed.GET("/letters/drafts/:id", h.GetDraftLetter)
 	authed.GET("/letters/drafts/:id/attachments", h.ListDraftAttachments)
@@ -93,9 +97,15 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 	authed.GET("/notifications", h.ListNotifications)
 	authed.POST("/notifications/:id/read", h.MarkNotificationRead)
 	authed.POST("/notifications/read-all", h.MarkAllNotificationsRead)
+	authed.GET("/audit/letters/export", h.ExportAuditLetters)
+	authed.POST("/push-tokens", h.RegisterPushToken)
+	authed.DELETE("/push-tokens", h.UnregisterPushToken)
 
 	// Khusus admin
 	admin := authed.Group("", middleware.RequireRole("admin"))
+
+	effectiveness := authed.Group("", middleware.RequireRole("admin", "management_viewer"))
+	effectiveness.GET("/management/effectiveness", h.ManagementEffectiveness)
 	admin.POST("/org-units", h.CreateOrgUnit)
 	admin.PUT("/org-units/:id", h.UpdateOrgUnit)
 	admin.DELETE("/org-units/:id", h.DeactivateOrgUnit)
@@ -130,11 +140,17 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 	admin.DELETE("/users/:id", h.DeactivateUser)
 	admin.GET("/users/import/template", h.ImportTemplate)
 	admin.POST("/users/import", h.ImportUsers)
+	admin.GET("/audit-assignments", h.ListAuditAssignments)
+	admin.GET("/audit-assignments/options", h.AuditAssignmentOptions)
+	admin.POST("/audit-assignments", h.CreateAuditAssignment)
+	admin.PUT("/audit-assignments/:id", h.UpdateAuditAssignment)
+	admin.DELETE("/audit-assignments/:id", h.DeleteAuditAssignment)
 
 	creator := authed.Group("", middleware.RequireRole("admin", "creator", "secretary"))
 	creator.POST("/letters/drafts", h.CreateDraftLetter)
 	creator.PUT("/letters/drafts/:id", h.UpdateDraftLetter)
 	creator.POST("/letters/drafts/:id/attachments", h.UploadDraftAttachment)
+	creator.GET("/letters/drafts/:id/attachments/:attachment_id/download", h.DownloadLetterAttachment)
 	creator.DELETE("/letters/drafts/:id/attachments/:attachment_id", h.DeleteDraftAttachment)
 	creator.POST("/letters/drafts/:id/preview", h.PreviewDraftLetter)
 	creator.POST("/letters/drafts/:id/submit", h.SubmitDraftLetter)

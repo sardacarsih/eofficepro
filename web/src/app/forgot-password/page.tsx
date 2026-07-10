@@ -31,7 +31,7 @@ export default function ForgotPasswordPage() {
             Lupa Password
           </h1>
           <p className="text-sm text-zinc-500">
-            Masukkan email terdaftar — tautan reset akan dikirim.
+            Masukkan email terdaftar — kode reset 6 digit akan dikirim.
           </p>
         </div>
 
@@ -62,13 +62,22 @@ export default function ForgotPasswordPage() {
             </p>
           )}
 
-          <button
-            type="submit"
-            disabled={loading || !!message}
-            className="rounded-lg bg-navy-700 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:opacity-60"
-          >
-            {loading ? "Mengirim..." : "Kirim Tautan Reset"}
-          </button>
+          {message ? (
+            <Link
+              href={`/reset-password?email=${encodeURIComponent(email)}`}
+              className="rounded-lg bg-navy-700 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-navy-800"
+            >
+              Masukkan Kode Reset
+            </Link>
+          ) : (
+            <button
+              type="submit"
+              disabled={loading}
+              className="rounded-lg bg-navy-700 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:opacity-60"
+            >
+              {loading ? "Mengirim..." : "Kirim Kode Reset"}
+            </button>
+          )}
 
           <Link
             href="/login"

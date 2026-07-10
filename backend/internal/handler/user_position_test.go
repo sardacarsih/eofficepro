@@ -62,9 +62,51 @@ func TestListUsersIncludesMultipleActiveAssignments_Integration(t *testing.T) {
 	gotAssignments := map[string]bool{}
 	for _, position := range positions {
 		gotAssignments[position.AssignmentID] = true
+		if position.CompanyID != fixture.companyID || position.CompanyCode == "" || position.CompanyName == "" {
+			t.Fatalf("position company identity missing: %+v", position)
+		}
 	}
 	if !gotAssignments[assignmentA] || !gotAssignments[assignmentB] {
 		t.Fatalf("positions missing assignments %q/%q: %+v", assignmentA, assignmentB, positions)
+	}
+}
+
+func TestUserCanUsePositionForCompanyRejectsMismatchedOrInactiveScope_Integration(t *testing.T) {
+	h, fixture := newUserPositionFixture(t)
+	ctx := context.Background()
+
+	userID := fixture.insertUser(t, "USRSCOPE", "Scoped Holder")
+	orgUnitID := fixture.insertOrgUnit(t, "SCOPE", "Scoped Unit")
+	positionID := fixture.insertPosition(t, orgUnitID, "Scoped Position")
+	fixture.insertUserPosition(t, userID, positionID, "definitive")
+
+	allowed, err := h.userCanUsePositionForCompany(ctx, userID, positionID, fixture.companyID)
+	if err != nil || !allowed {
+		t.Fatalf("userCanUsePositionForCompany matching scope = (%t, %v), want (true, nil)", allowed, err)
+	}
+
+	var otherCompanyID string
+	if err := fixture.db.QueryRow(ctx, `
+		INSERT INTO companies (code, name)
+		VALUES ($1, $2)
+		RETURNING id::text`, "TUX"+fixture.suffix, "Other Scope "+fixture.suffix).Scan(&otherCompanyID); err != nil {
+		t.Fatalf("insert other company error: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.db.Exec(ctx, `DELETE FROM companies WHERE id = $1`, otherCompanyID)
+	})
+
+	allowed, err = h.userCanUsePositionForCompany(ctx, userID, positionID, otherCompanyID)
+	if err != nil || allowed {
+		t.Fatalf("userCanUsePositionForCompany mismatched company = (%t, %v), want (false, nil)", allowed, err)
+	}
+
+	if _, err := fixture.db.Exec(ctx, `UPDATE positions SET is_active = false WHERE id = $1`, positionID); err != nil {
+		t.Fatalf("deactivate position error: %v", err)
+	}
+	allowed, err = h.userCanUsePositionForCompany(ctx, userID, positionID, fixture.companyID)
+	if err != nil || allowed {
+		t.Fatalf("userCanUsePositionForCompany inactive position = (%t, %v), want (false, nil)", allowed, err)
 	}
 }
 

@@ -18,6 +18,8 @@ mobile/build/
 mobile/.flutter-plugins*
 mobile/android/.gradle/
 mobile/android/local.properties
+mobile/android/app/google-services.json
+firebase-service-account*.json
 
 # Docker volumes (local dev)
 .volumes/
