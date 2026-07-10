@@ -36,7 +36,9 @@ func (h *Handler) checkSLA(ctx context.Context) {
 	if err != nil {
 		log.Printf("sla watcher: eskalasi gagal: %v", err)
 	}
-	h.sendNotificationEmails(append(reminderEmails, escalationEmails...))
+	if err := h.enqueueNotificationOutboxDirect(ctx, append(reminderEmails, escalationEmails...)); err != nil {
+		log.Printf("sla watcher: antre notifikasi gagal: %v", err)
+	}
 }
 
 func (h *Handler) insertSLAReminders(ctx context.Context) ([]notificationEmail, error) {

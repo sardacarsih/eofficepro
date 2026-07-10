@@ -245,6 +245,10 @@ func (h *Handler) CreateDisposition(c *gin.Context) {
 		return
 	}
 
+	if err := enqueueNotificationOutbox(ctx, tx, emails); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengantrikan notifikasi disposisi"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan disposisi"})
 		return
@@ -254,7 +258,6 @@ func (h *Handler) CreateDisposition(c *gin.Context) {
 		"letter_id":  letterID,
 		"recipients": len(recipients),
 	}, c.ClientIP())
-	h.sendNotificationEmails(emails)
 	c.JSON(http.StatusOK, gin.H{"id": dispositionID})
 }
 
@@ -272,9 +275,10 @@ func (h *Handler) ListLetterDispositions(c *gin.Context) {
 	}
 
 	var isCreator bool
+	var letterStatus string
 	if err := h.DB.QueryRow(ctx,
-		`SELECT creator_user_id = $2 FROM letters WHERE id = $1`, letterID, userID).
-		Scan(&isCreator); err != nil {
+		`SELECT creator_user_id = $2, status FROM letters WHERE id = $1`, letterID, userID).
+		Scan(&isCreator, &letterStatus); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "surat tidak ditemukan"})
 		return
 	}
@@ -287,6 +291,15 @@ func (h *Handler) ListLetterDispositions(c *gin.Context) {
 		if !canAccess {
 			participant, err := h.userIsDispositionParticipant(ctx, userID, letterID)
 			if err != nil || !participant {
+				// Penerima surat yang belum terbit bukan masalah akses:
+				// disposisi memang baru tersedia setelah surat published.
+				if letterStatus != "published" {
+					recipient, recErr := h.userIsLetterRecipient(ctx, userID, letterID)
+					if recErr == nil && recipient {
+						c.JSON(http.StatusForbidden, gin.H{"error": "Disposisi tersedia setelah surat terbit"})
+						return
+					}
+				}
 				c.JSON(http.StatusForbidden, gin.H{"error": "Anda tidak memiliki akses ke disposisi surat ini"})
 				return
 			}
@@ -621,6 +634,10 @@ func (h *Handler) UpdateDispositionStatus(c *gin.Context) {
 		return
 	}
 
+	if err := enqueueNotificationOutbox(ctx, tx, emails); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengantrikan notifikasi tindak lanjut"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan status disposisi"})
 		return
@@ -630,6 +647,5 @@ func (h *Handler) UpdateDispositionStatus(c *gin.Context) {
 		"letter_id":    letterID,
 		"recipient_id": recipientID,
 	}, c.ClientIP())
-	h.sendNotificationEmails(emails)
 	c.JSON(http.StatusOK, gin.H{"id": recipientID, "status": req.Status})
 }

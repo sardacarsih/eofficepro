@@ -47,6 +47,9 @@ func (h *Handler) ListUsers(c *gin.Context) {
 					'title', p.title,
 					'position_type', p.position_type,
 					'org_unit_name', ou.name,
+					'company_id', company.id::text,
+					'company_code', company.code,
+					'company_name', company.name,
 					'assignment_type', up.assignment_type,
 					'valid_from', up.valid_from::text,
 					'valid_to', up.valid_to::text
@@ -56,6 +59,7 @@ func (h *Handler) ListUsers(c *gin.Context) {
 			FROM user_positions up
 			JOIN positions p ON p.id = up.position_id
 			JOIN org_units ou ON ou.id = p.org_unit_id
+			JOIN companies company ON company.id = ou.company_id
 			WHERE up.user_id = u.id
 			  AND current_date >= up.valid_from
 			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
@@ -105,6 +109,9 @@ type userPositionAssignment struct {
 	Title        string  `json:"title"`
 	PositionType string  `json:"position_type"`
 	OrgUnitName  string  `json:"org_unit_name"`
+	CompanyID    string  `json:"company_id"`
+	CompanyCode  string  `json:"company_code"`
+	CompanyName  string  `json:"company_name"`
 	Assignment   string  `json:"assignment_type"`
 	ValidFrom    string  `json:"valid_from"`
 	ValidTo      *string `json:"valid_to"`

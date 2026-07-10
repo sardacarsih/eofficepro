@@ -1,23 +1,10 @@
+import 'package:eoffice_mobile/app/app.dart';
+import 'package:eoffice_mobile/core/services/push_notification_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-void main() => runApp(const EOfficeApp());
-
-class EOfficeApp extends StatelessWidget {
-  const EOfficeApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'eOffice Pro',
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF2E7D4F), // hijau KSK
-        useMaterial3: true,
-      ),
-      home: const Scaffold(
-        body: Center(
-          child: Text('eOffice Pro — scaffold awal.\nLayar login menyusul di Epic E09.'),
-        ),
-      ),
-    );
-  }
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await PushNotificationService.initializeFirebase();
+  runApp(const ProviderScope(child: EOfficeApp()));
 }

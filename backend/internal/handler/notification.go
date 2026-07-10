@@ -7,15 +7,18 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/kskgroup/eofficepro/internal/middleware"
+	"github.com/kskgroup/eofficepro/internal/push"
 )
 
 const (
@@ -52,6 +55,7 @@ func (h *Handler) sendNotificationEmails(items []notificationEmail) {
 	if len(items) == 0 {
 		return
 	}
+	h.sendNotificationPushes(items)
 	go func() {
 		for _, item := range items {
 			link := h.Cfg.WebBaseURL + "/letters/" + item.LetterID
@@ -64,6 +68,203 @@ func (h *Handler) sendNotificationEmails(items []notificationEmail) {
 			}
 		}
 	}()
+}
+
+func (h *Handler) sendNotificationPushes(items []notificationEmail) {
+	if h.Push == nil || !h.Push.Enabled() || len(items) == 0 {
+		return
+	}
+	go func() {
+		ctx := context.Background()
+		for _, item := range items {
+			tokens, err := h.pushTokensForEmail(ctx, item.Email)
+			if err != nil {
+				log.Printf("query FCM tokens failed for %s: %v", item.Email, err)
+				continue
+			}
+			if len(tokens) == 0 {
+				log.Printf("push dilewati untuk %s: tidak ada device token terdaftar", item.Email)
+				continue
+			}
+			classification, err := h.pushNotificationClassification(ctx, item.LetterID)
+			if err != nil {
+				log.Printf("query notification classification failed for %s: %v", item.LetterID, err)
+			}
+			invalidTokens := h.Push.SendToTokens(ctx, tokens, buildPushMessage(item, classification))
+			if len(invalidTokens) > 0 {
+				if err := h.deletePushTokens(ctx, invalidTokens); err != nil {
+					log.Printf("delete invalid FCM tokens failed: %v", err)
+				}
+			}
+		}
+	}()
+}
+
+func buildPushMessage(item notificationEmail, classification string) push.Message {
+	message := push.Message{
+		Title:         item.Title,
+		Body:          truncatePushBody(item.Body),
+		LetterID:      item.LetterID,
+		Event:         item.EventType,
+		TargetSection: notificationTargetSection(item.EventType),
+	}
+	if classification == "rahasia" {
+		message.Title = "Notifikasi eOffice Pro"
+		message.Body = "Ada pembaruan surat rahasia. Buka eOffice Pro untuk melihat detail."
+	}
+	return message
+}
+
+func truncatePushBody(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= 180 {
+		return value
+	}
+	return string(runes[:177]) + "..."
+}
+
+func notificationTargetSection(eventType string) string {
+	switch eventType {
+	case "approval_waiting", "sla_reminder", "sla_escalation":
+		return "approvals"
+	case "disposition_assigned", "disposition_updated":
+		return "dispositions"
+	case "letter_incoming", "approval_result":
+		return "inbox"
+	default:
+		return "dashboard"
+	}
+}
+
+func (h *Handler) pushNotificationClassification(ctx context.Context, letterID string) (string, error) {
+	if strings.TrimSpace(letterID) == "" {
+		return "", nil
+	}
+	var classification string
+	err := h.DB.QueryRow(ctx, `
+		SELECT classification
+		FROM letters
+		WHERE id = $1`, letterID).Scan(&classification)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return classification, err
+}
+
+func (h *Handler) pushTokensForEmail(ctx context.Context, email string) ([]string, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT pt.token
+		FROM user_push_tokens pt
+		JOIN users u ON u.id = pt.user_id
+		WHERE u.email = $1
+		  AND u.status = 'active'`, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tokens := []string{}
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens, rows.Err()
+}
+
+func (h *Handler) deletePushTokens(ctx context.Context, tokens []string) error {
+	_, err := h.DB.Exec(ctx, `
+		DELETE FROM user_push_tokens
+		WHERE token = ANY($1::text[])`, tokens)
+	return err
+}
+
+type pushTokenRequest struct {
+	Token      string `json:"token"`
+	Platform   string `json:"platform"`
+	DeviceInfo string `json:"device_info"`
+	AppVersion string `json:"app_version"`
+	DeviceID   string `json:"device_id"`
+}
+
+func (h *Handler) RegisterPushToken(c *gin.Context) {
+	userID := c.GetString(middleware.CtxUserID)
+	var req pushTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "data token push tidak valid"})
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	req.Platform = strings.ToLower(strings.TrimSpace(req.Platform))
+	req.DeviceInfo = strings.TrimSpace(req.DeviceInfo)
+	req.AppVersion = strings.TrimSpace(req.AppVersion)
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	if req.Platform == "" {
+		req.Platform = "android"
+	}
+	if req.Token == "" || len(req.Token) > 4096 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "token push tidak valid"})
+		return
+	}
+	if req.Platform != "android" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "platform push tidak didukung"})
+		return
+	}
+	if len(req.DeviceInfo) > 255 {
+		req.DeviceInfo = req.DeviceInfo[:255]
+	}
+	if len(req.AppVersion) > 50 {
+		req.AppVersion = req.AppVersion[:50]
+	}
+	if len(req.DeviceID) > 150 {
+		req.DeviceID = req.DeviceID[:150]
+	}
+
+	if _, err := h.DB.Exec(c.Request.Context(), `
+		INSERT INTO user_push_tokens (user_id, token, platform, device_info, app_version, device_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (token) DO UPDATE
+		SET user_id = EXCLUDED.user_id,
+		    platform = EXCLUDED.platform,
+		    device_info = EXCLUDED.device_info,
+		    app_version = EXCLUDED.app_version,
+		    device_id = EXCLUDED.device_id,
+		    last_seen_at = now()`,
+		userID,
+		req.Token,
+		req.Platform,
+		nullableString(req.DeviceInfo),
+		nullableString(req.AppVersion),
+		nullableString(req.DeviceID)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan token push"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"registered": true})
+}
+
+func (h *Handler) UnregisterPushToken(c *gin.Context) {
+	userID := c.GetString(middleware.CtxUserID)
+	var req pushTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "data token push tidak valid"})
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "token push tidak valid"})
+		return
+	}
+	tag, err := h.DB.Exec(c.Request.Context(), `
+		DELETE FROM user_push_tokens
+		WHERE user_id = $1 AND token = $2`, userID, req.Token)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghapus token push"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"removed": tag.RowsAffected() > 0})
 }
 
 // notifyWaitingApprovers memberi tahu seluruh pemegang aktif jabatan approver

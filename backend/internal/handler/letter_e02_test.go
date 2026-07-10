@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"encoding/base64"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -110,7 +111,7 @@ func TestRenderFinalLetterPDF(t *testing.T) {
 	pdf, err := renderFinalLetterPDF(data, map[string][]string{
 		"to": {"Direktur - Information System"},
 		"cc": {"HRGA"},
-	}, "http://localhost:3000/verify/verify-token", nil)
+	}, "http://localhost:3000/verify/verify-token", nil, nil)
 	if err != nil {
 		t.Fatalf("renderFinalLetterPDF() error = %v", err)
 	}
@@ -165,6 +166,46 @@ func TestGenerateVerificationQRCodeRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestValidateApprovalSignatureImage(t *testing.T) {
+	signature := makeTestSignature(t, 360, 140)
+	got, err := validateApprovalSignatureImage(base64.StdEncoding.EncodeToString(signature), "image/png")
+	if err != nil {
+		t.Fatalf("validateApprovalSignatureImage(valid) error = %v", err)
+	}
+	if got.MIMEType != signatureMIMEType {
+		t.Errorf("signature MIME type = %q, want %q", got.MIMEType, signatureMIMEType)
+	}
+	if got.SizeBytes != len(signature) {
+		t.Errorf("signature size = %d, want %d", got.SizeBytes, len(signature))
+	}
+	if len(got.ChecksumSHA256) != 64 {
+		t.Errorf("signature checksum length = %d, want 64", len(got.ChecksumSHA256))
+	}
+}
+
+func TestValidateApprovalSignatureImageRejectsInvalidInput(t *testing.T) {
+	blank := makeBlankPNG(t, 360, 140)
+	oversized := makeTestSignature(t, maxSignatureImageWidth+1, 120)
+	tests := []struct {
+		name     string
+		data     string
+		mimeType string
+	}{
+		{name: "missing", mimeType: "image/png"},
+		{name: "not_base64", data: "not-base64", mimeType: "image/png"},
+		{name: "wrong_mime", data: base64.StdEncoding.EncodeToString(makeTestSignature(t, 360, 140)), mimeType: "image/jpeg"},
+		{name: "blank", data: base64.StdEncoding.EncodeToString(blank), mimeType: "image/png"},
+		{name: "too_wide", data: base64.StdEncoding.EncodeToString(oversized), mimeType: "image/png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := validateApprovalSignatureImage(tt.data, tt.mimeType); err == nil {
+				t.Fatalf("validateApprovalSignatureImage(%s) error = nil, want error", tt.name)
+			}
+		})
+	}
+}
+
 func TestRenderFinalLetterPDFRequiresVerificationData(t *testing.T) {
 	publishedAt := time.Date(2026, 7, 8, 10, 30, 0, 0, time.UTC)
 	token := "verify-token"
@@ -195,7 +236,7 @@ func TestRenderFinalLetterPDFRequiresVerificationData(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			data := baseData
 			data.QRToken = tt.token
-			if _, err := renderFinalLetterPDF(data, map[string][]string{"to": {"Direktur"}}, tt.verifyURL, nil); err == nil {
+			if _, err := renderFinalLetterPDF(data, map[string][]string{"to": {"Direktur"}}, tt.verifyURL, nil, nil); err == nil {
 				t.Errorf("renderFinalLetterPDF() error = nil, want error for %s", tt.name)
 			}
 		})
@@ -225,6 +266,7 @@ func TestRenderFinalLetterPDFWithLongBody(t *testing.T) {
 		map[string][]string{"to": {"Direktur"}},
 		"http://localhost:3000/verify/verify-token",
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("renderFinalLetterPDF(long body) error = %v", err)
@@ -234,6 +276,56 @@ func TestRenderFinalLetterPDFWithLongBody(t *testing.T) {
 	}
 	if !bytes.Contains(pdf, []byte("/Subtype /Image")) {
 		t.Fatalf("renderFinalLetterPDF(long body) did not embed a QR image")
+	}
+}
+
+func TestRenderFinalLetterPDFWithApprovalSignatures(t *testing.T) {
+	publishedAt := time.Date(2026, 7, 8, 10, 30, 0, 0, time.UTC)
+	token := "verify-token"
+	data := draftPreviewData{
+		CompanyName:          "PT Kalimantan Sawit Kusuma",
+		LetterTypeCode:       "ND",
+		LetterTypeName:       "Nota Dinas",
+		LetterNumber:         "0001/ND/IS/VII/2026",
+		Subject:              "Dokumen Bertanda Tangan",
+		Classification:       "biasa",
+		Priority:             "normal",
+		CreatorName:          "Budi",
+		CreatorPositionTitle: "Dept Head",
+		Version:              3,
+		BodyPlain:            "Isi final surat.",
+		QRToken:              &token,
+		PublishedAt:          &publishedAt,
+	}
+	signature := makeTestSignature(t, 360, 140)
+
+	pdf, err := renderFinalLetterPDF(
+		data,
+		map[string][]string{"to": {"Direktur"}},
+		"http://localhost:3000/verify/verify-token",
+		nil,
+		[]approvalPDFSignature{
+			{
+				StepOrder:     1,
+				PositionTitle: "GM Finance",
+				ActorName:     "Approver One",
+				ActedAt:       publishedAt,
+				Image:         signature,
+			},
+			{
+				StepOrder:     2,
+				PositionTitle: "Director Finance",
+				ActorName:     "Approver Two",
+				ActedAt:       publishedAt.Add(time.Minute),
+				Image:         signature,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("renderFinalLetterPDF(with signatures) error = %v", err)
+	}
+	if got := bytes.Count(pdf, []byte("/Subtype /Image")); got < 2 {
+		t.Errorf("renderFinalLetterPDF(with signatures) image count = %d, want at least 2 (signature and QR)", got)
 	}
 }
 
@@ -330,6 +422,7 @@ func TestRenderPDFWithCompanyLogo(t *testing.T) {
 		map[string][]string{"to": {"Direktur"}},
 		"http://localhost:3000/verify/verify-token",
 		logo,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("renderFinalLetterPDF(with logo) error = %v", err)
@@ -360,6 +453,45 @@ func makeTestLogo(t *testing.T, format string, width int, height int) []byte {
 	}
 	if err != nil {
 		t.Fatalf("makeTestLogo(%q, %d, %d) error = %v", format, width, height, err)
+	}
+	return out.Bytes()
+}
+
+func makeTestSignature(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	for x := width / 8; x < width*7/8; x++ {
+		y := height/2 + (x % 21) - 10
+		for dy := -2; dy <= 2; dy++ {
+			if y+dy >= 0 && y+dy < height {
+				img.Set(x, y+dy, color.RGBA{A: 255})
+			}
+		}
+	}
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		t.Fatalf("encode test signature error: %v", err)
+	}
+	return out.Bytes()
+}
+
+func makeBlankPNG(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		t.Fatalf("encode blank png error: %v", err)
 	}
 	return out.Bytes()
 }

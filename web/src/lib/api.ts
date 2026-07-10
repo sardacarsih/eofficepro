@@ -1,8 +1,13 @@
 // Klien API eOffice Pro — menyimpan token di localStorage (cukup untuk fase dev;
 // evaluasi httpOnly cookie saat hardening E10).
 
+// Tanpa env, ikuti hostname halaman agar tetap jalan saat web dibuka lewat
+// alias emulator Android (http://10.0.2.2:3000), bukan hanya localhost.
 const BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080/api/v1";
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  (typeof window === "undefined"
+    ? "http://localhost:8080/api/v1"
+    : `${window.location.protocol}//${window.location.hostname}:8080/api/v1`);
 
 const ACCESS_KEY = "eoffice_access";
 const REFRESH_KEY = "eoffice_refresh";
@@ -13,11 +18,18 @@ export interface User {
   email: string;
   full_name: string;
   roles: string[];
+  capabilities?: {
+    can_approve: boolean;
+    can_export_audit: boolean;
+  };
   positions?: {
     position_id: string;
     title: string;
     position_type: string;
     org_unit: string;
+    company_id: string;
+    company_code: string;
+    company_name: string;
     assignment_type: string;
   }[];
 }
@@ -225,6 +237,9 @@ export interface Position {
   org_unit_id: string;
   org_unit_name: string;
   org_unit_level: string;
+  company_id: string;
+  company_code: string;
+  company_name: string;
   holder_name: string;
   holder_user_id: string;
   identity_locked: boolean;
@@ -396,6 +411,7 @@ export interface LetterType {
   name: string;
   default_classification: "biasa" | "terbatas" | "rahasia";
   default_sla_hours: number;
+  electronic_submission_enabled: boolean;
   is_active: boolean;
 }
 
@@ -404,6 +420,7 @@ export interface LetterTypePayload {
   name: string;
   default_classification: LetterType["default_classification"];
   default_sla_hours: number;
+  electronic_submission_enabled?: boolean;
   is_active?: boolean;
 }
 
@@ -612,6 +629,7 @@ export interface DraftLetter {
   creator_position_title: string;
   on_behalf_of_position_id: string | null;
   on_behalf_of_title: string | null;
+  template_id: string | null;
   version: number;
   body_html: string;
   body_plain: string;
@@ -632,6 +650,8 @@ export interface DraftLetterPayload {
   letter_type_id: string;
   creator_position_id: string;
   on_behalf_of_position_id?: string | null;
+  template_id?: string | null;
+  base_version?: number;
   subject: string;
   classification?: LetterType["default_classification"];
   priority: DraftLetter["priority"];
@@ -726,6 +746,25 @@ export const previewDraftLetter = (id: string) =>
 export const submitDraftLetter = (id: string) =>
   apiFetch<SubmitDraftResult>(`/letters/drafts/${id}/submit`, { method: "POST" });
 
+export async function downloadAuthenticatedFile(path: string, fallbackName: string): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
+  });
+  if (!response.ok) {
+    await parseAPIResponse(response, "Unduh file gagal");
+    return;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fallbackName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ---- Inbox surat masuk ----
 
 export interface IncomingLetter {
@@ -786,6 +825,8 @@ export interface ApprovalActionPayload {
   note?: string;
   client_action_id?: string;
   device_info?: string;
+  signature_image_base64?: string;
+  signature_mime_type?: "image/png";
 }
 
 export interface ApprovalActionResult {
@@ -997,13 +1038,14 @@ export async function forgotPassword(email: string): Promise<string> {
 }
 
 export async function resetPassword(
-  token: string,
+  email: string,
+  code: string,
   newPassword: string,
 ): Promise<string> {
   const res = await fetch(`${BASE}/auth/reset-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, new_password: newPassword }),
+    body: JSON.stringify({ email, code, new_password: newPassword }),
   });
   const data = await parseAPIResponse<{ message: string }>(res, "Reset password gagal");
   return data.message;
@@ -1103,6 +1145,60 @@ export async function changePassword(
 
 // ---- Manajemen pengguna (admin) ----
 
+export type AuditClassification = "biasa" | "terbatas" | "rahasia";
+
+export interface AuditAssignment {
+  id: string;
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  org_unit_id: string;
+  org_unit_name: string;
+  org_unit_code: string;
+  max_classification: AuditClassification;
+  can_export: boolean;
+  valid_from: string;
+  valid_to: string | null;
+}
+
+export interface AuditAssignmentPayload {
+  user_id: string;
+  org_unit_id: string;
+  max_classification: AuditClassification;
+  can_export: boolean;
+  valid_from: string;
+  valid_to: string | null;
+}
+
+export interface AuditAssignmentOptions {
+  auditors: { id: string; full_name: string; email: string }[];
+  org_units: { org_unit_id: string; name: string; code: string }[];
+}
+
+export const listAuditAssignments = () =>
+  apiFetch<{ data: AuditAssignment[] }>("/audit-assignments");
+
+export const getAuditAssignmentOptions = () =>
+  apiFetch<AuditAssignmentOptions>("/audit-assignments/options");
+
+export const createAuditAssignment = (payload: AuditAssignmentPayload) =>
+  apiFetch<{ id: string }>("/audit-assignments", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateAuditAssignment = (
+  id: string,
+  payload: AuditAssignmentPayload,
+) =>
+  apiFetch<{ id: string }>(`/audit-assignments/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deleteAuditAssignment = (id: string) =>
+  apiFetch<{ id: string }>(`/audit-assignments/${id}`, { method: "DELETE" });
+
 export interface UserRow {
   id: string;
   nik: string;
@@ -1119,6 +1215,9 @@ export interface UserPositionAssignment {
   title: string;
   position_type: string;
   org_unit_name: string;
+  company_id: string;
+  company_code: string;
+  company_name: string;
   assignment_type: "definitive" | "plt" | "plh";
   valid_from: string;
   valid_to: string | null;
@@ -1237,5 +1336,49 @@ export async function downloadImportTemplate() {
   a.href = url;
   a.download = "template-import-pengguna.xlsx";
   a.click();
+  URL.revokeObjectURL(url);
+}
+
+export interface EffectivenessSummary {
+  from: string;
+  to: string;
+  active_users: number;
+  registered_users: number;
+  letters_created: number;
+  letters_published: number;
+  pending_approvals: number;
+  overdue_approvals: number;
+  approval_actions: number;
+  read_notifications: number;
+  total_notifications: number;
+}
+
+export const getEffectivenessSummary = (from?: string, to?: string) =>
+  apiFetch<EffectivenessSummary>(`/management/effectiveness${buildQuery({ from, to })}`);
+
+export async function downloadAuditLetterExport(from: string, to: string, retried = false) {
+  const res = await fetch(
+    `${BASE}/audit/letters/export${buildQuery({ from, to })}`,
+    { headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` } },
+  );
+  if (res.status === 401 && !retried && (await tryRefresh())) {
+    return downloadAuditLetterExport(from, to, true);
+  }
+  if (res.status === 401) {
+    clearTokens();
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new ApiError("Sesi berakhir, silakan login ulang", res.status);
+  }
+  if (!res.ok) {
+    await parseAPIResponse<unknown>(res, "Ekspor audit gagal");
+    return;
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `audit-letters-${from}-${to}.csv`;
+  anchor.click();
   URL.revokeObjectURL(url);
 }

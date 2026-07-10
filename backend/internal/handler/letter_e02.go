@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jung-kurt/gofpdf"
 	"github.com/minio/minio-go/v7"
+	"golang.org/x/net/html"
 
 	"github.com/kskgroup/eofficepro/internal/middleware"
 )
@@ -77,6 +78,8 @@ type draftPreviewData struct {
 	CreatorName          string
 	CreatorPositionTitle string
 	Version              int
+	TemplateSnapshot     []byte
+	BodyHTML             string
 	BodyPlain            string
 	QRToken              *string
 	PublishedAt          *time.Time
@@ -132,12 +135,6 @@ func (h *Handler) UploadDraftAttachment(c *gin.Context) {
 		return
 	}
 
-	contentType := normalizeMIMEType(fileHeader.Header.Get("Content-Type"))
-	if !allowedAttachmentMIMETypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tipe file lampiran tidak diizinkan"})
-		return
-	}
-
 	file, err := fileHeader.Open()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gagal membaca lampiran"})
@@ -154,10 +151,15 @@ func (h *Handler) UploadDraftAttachment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ukuran lampiran maksimal 25 MB"})
 		return
 	}
+	contentType, err := validateDraftAttachmentContent(data, fileHeader.Filename, fileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	sum := sha256.Sum256(data)
 	checksum := hex.EncodeToString(sum[:])
-	objectName := fmt.Sprintf("letters/%s/attachments/%s-%s", letterID, randomHex(8), safeObjectFileName(fileHeader.Filename))
+	objectName := fmt.Sprintf("quarantine/letters/%s/attachments/%s-%s", letterID, randomHex(8), safeObjectFileName(fileHeader.Filename))
 
 	if _, err := h.Minio.PutObject(ctx, h.Bucket, objectName, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
 		ContentType: contentType,
@@ -169,8 +171,8 @@ func (h *Handler) UploadDraftAttachment(c *gin.Context) {
 	var attachmentID string
 	err = h.DB.QueryRow(ctx, `
 		INSERT INTO letter_attachments
-			(letter_id, file_name, mime_type, size_bytes, storage_key, checksum_sha256, uploaded_by, scan_status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'clean')
+		(letter_id, file_name, mime_type, size_bytes, storage_key, checksum_sha256, uploaded_by, scan_status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
 		RETURNING id::text`,
 		letterID,
 		strings.TrimSpace(fileHeader.Filename),
@@ -185,12 +187,18 @@ func (h *Handler) UploadDraftAttachment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan metadata lampiran"})
 		return
 	}
+	if _, err := h.DB.Exec(ctx, `INSERT INTO attachment_scan_jobs (attachment_id) VALUES ($1)`, attachmentID); err != nil {
+		_ = h.Minio.RemoveObject(ctx, h.Bucket, objectName, minio.RemoveObjectOptions{})
+		_, _ = h.DB.Exec(ctx, `DELETE FROM letter_attachments WHERE id = $1`, attachmentID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membuat antrean pemindaian lampiran"})
+		return
+	}
 
 	h.audit(ctx, "letter", &letterID, "upload_attachment", &userID, map[string]any{
 		"attachment_id": attachmentID,
 		"file_name":     fileHeader.Filename,
 		"size_bytes":    len(data),
-		"scan_status":   "clean",
+		"scan_status":   "pending",
 	}, c.ClientIP())
 	c.JSON(http.StatusCreated, gin.H{"id": attachmentID})
 }
@@ -324,6 +332,30 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "isi surat wajib diisi sebelum diajukan"})
 		return
 	}
+	var electronicSubmissionEnabled bool
+	if err := tx.QueryRow(ctx, `
+		SELECT electronic_submission_enabled
+		FROM letter_types
+		WHERE id = $1 AND is_active`, draft.LetterTypeID).Scan(&electronicSubmissionEnabled); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "jenis surat tidak aktif atau tidak ditemukan"})
+		return
+	}
+	if !electronicSubmissionEnabled {
+		c.JSON(http.StatusForbidden, gin.H{"error": "jenis surat ini belum diizinkan untuk pengajuan elektronik"})
+		return
+	}
+	var unsafeAttachmentCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM letter_attachments
+		WHERE letter_id = $1 AND scan_status <> 'clean'`, letterID).Scan(&unsafeAttachmentCount); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa status lampiran"})
+		return
+	}
+	if unsafeAttachmentCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "semua lampiran harus berstatus clean sebelum surat diajukan"})
+		return
+	}
 
 	recipients, err := loadDraftRecipientRequests(ctx, tx, letterID)
 	if err != nil {
@@ -379,6 +411,10 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengajukan surat"})
 		return
 	}
+	if err := enqueueNotificationOutbox(ctx, tx, approverEmails); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengantrikan notifikasi approval"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan pengajuan"})
 		return
@@ -389,7 +425,6 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		"approval_cycle": approvalCycle,
 		"qr_token":       qrToken,
 	}, c.ClientIP())
-	h.sendNotificationEmails(approverEmails)
 	c.JSON(http.StatusOK, gin.H{
 		"id":             letterID,
 		"status":         "in_approval",
@@ -500,9 +535,9 @@ func (h *Handler) loadLetterAttachments(c *gin.Context, letterID string, include
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca lampiran"})
 			return nil, false
 		}
-		if includeURL && h.Minio != nil {
-			item.DownloadURL, _ = h.presignedGetURL(c.Request.Context(), item.StorageKey)
-		}
+		// Downloads are served through authenticated handlers so a presigned URL
+		// cannot be forwarded to an unauthorized recipient.
+		_ = includeURL
 		attachments = append(attachments, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -524,7 +559,7 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 		       COALESCE(co.letterhead_config #>> '{logo,mime_type}', ''),
 		       lt.code, lt.name,
 		       l.subject, l.classification, l.priority, u.full_name,
-		       p.title, COALESCE(v.version, 0), COALESCE(v.body_plain, ''),
+		       p.title, COALESCE(v.version, 0), l.template_snapshot, COALESCE(v.body_html, ''), COALESCE(v.body_plain, ''),
 		       l.qr_token, l.created_at, l.updated_at
 		FROM letters l
 		JOIN companies co ON co.id = l.company_id
@@ -557,6 +592,8 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 		&data.CreatorName,
 		&data.CreatorPositionTitle,
 		&data.Version,
+		&data.TemplateSnapshot,
+		&data.BodyHTML,
 		&data.BodyPlain,
 		&data.QRToken,
 		&data.CreatedAt,
@@ -611,7 +648,7 @@ func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (dr
 		       COALESCE(co.letterhead_config #>> '{logo,mime_type}', ''),
 		       lt.code, lt.name,
 		       l.letter_number, l.subject, l.classification, l.priority,
-		       u.full_name, p.title, COALESCE(v.version, 0), COALESCE(v.body_plain, ''),
+		       u.full_name, p.title, COALESCE(v.version, 0), l.template_snapshot, COALESCE(v.body_html, ''), COALESCE(v.body_plain, ''),
 		       l.qr_token, l.published_at, l.created_at, l.updated_at
 		FROM letters l
 		JOIN companies co ON co.id = l.company_id
@@ -640,6 +677,8 @@ func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (dr
 		&data.CreatorName,
 		&data.CreatorPositionTitle,
 		&data.Version,
+		&data.TemplateSnapshot,
+		&data.BodyHTML,
 		&data.BodyPlain,
 		&data.QRToken,
 		&data.PublishedAt,
@@ -680,7 +719,11 @@ func (h *Handler) renderAndStoreFinalPDF(ctx context.Context, tx pgx.Tx, letterI
 	if err != nil {
 		return "", errors.New("gagal memuat logo perusahaan untuk PDF final")
 	}
-	pdfBytes, err := renderFinalLetterPDF(data, recipients, verifyURL, companyLogo)
+	signatures, err := h.loadApprovalPDFSignatures(ctx, tx, letterID)
+	if err != nil {
+		return "", errors.New("gagal memuat tanda tangan approval untuk PDF final")
+	}
+	pdfBytes, err := renderFinalLetterPDF(data, recipients, verifyURL, companyLogo, signatures)
 	if err != nil {
 		return "", errors.New("gagal membuat PDF final")
 	}
@@ -798,8 +841,7 @@ func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]strin
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetTitle(data.Subject, true)
 	pdf.SetAuthor("eOffice Pro", true)
-	pdf.SetMargins(20, 18, 20)
-	pdf.SetAutoPageBreak(true, 18)
+	configureLetterPDFLayout(pdf, data.TemplateSnapshot)
 	pdf.AddPage()
 
 	if err := writeLetterHeader(pdf, data, companyLogo); err != nil {
@@ -817,12 +859,9 @@ func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]strin
 	}
 	pdf.Ln(3)
 
-	pdf.SetFont("Arial", "", 11)
-	body := strings.TrimSpace(data.BodyPlain)
-	if body == "" {
-		body = "(isi surat kosong)"
+	if err := writeLetterHTML(pdf, data.BodyHTML, data.BodyPlain); err != nil {
+		return nil, err
 	}
-	pdf.MultiCell(0, 6, body, "", "L", false)
 	pdf.Ln(8)
 
 	pdf.SetFont("Arial", "I", 8)
@@ -840,7 +879,7 @@ func renderLetterPreviewPDF(data draftPreviewData, recipients map[string][]strin
 	return out.Bytes(), nil
 }
 
-func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string, verifyURL string, companyLogo []byte) ([]byte, error) {
+func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string, verifyURL string, companyLogo []byte, signatures []approvalPDFSignature) ([]byte, error) {
 	verifyURL = strings.TrimSpace(verifyURL)
 	if verifyURL == "" {
 		return nil, errors.New("URL verifikasi wajib tersedia untuk PDF final")
@@ -857,8 +896,7 @@ func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string,
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetTitle(data.Subject, true)
 	pdf.SetAuthor("eOffice Pro", true)
-	pdf.SetMargins(20, 18, 20)
-	pdf.SetAutoPageBreak(true, 18)
+	configureLetterPDFLayout(pdf, data.TemplateSnapshot)
 	pdf.AddPage()
 
 	if err := writeLetterHeader(pdf, data, companyLogo); err != nil {
@@ -883,20 +921,14 @@ func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string,
 	}
 	pdf.Ln(4)
 
-	pdf.SetFont("Arial", "", 11)
-	body := strings.TrimSpace(data.BodyPlain)
-	if body == "" {
-		body = "(isi surat kosong)"
+	if err := writeLetterHTML(pdf, data.BodyHTML, data.BodyPlain); err != nil {
+		return nil, err
 	}
-	pdf.MultiCell(0, 6, body, "", "L", false)
 	pdf.Ln(10)
 
-	pdf.SetFont("Arial", "", 10)
-	pdf.CellFormat(0, 6, data.CreatorPositionTitle+",", "", 1, "R", false, 0, "")
-	pdf.Ln(14)
-	pdf.SetFont("Arial", "B", 10)
-	pdf.CellFormat(0, 6, data.CreatorName, "", 1, "R", false, 0, "")
-
+	if err := writeApprovalSignaturesBlock(pdf, signatures); err != nil {
+		return nil, err
+	}
 	pdf.Ln(8)
 	if err := writeVerificationQRCodeBlock(pdf, qrCode.PNG, verifyURL, data.Version); err != nil {
 		return nil, err
@@ -907,6 +939,294 @@ func renderFinalLetterPDF(data draftPreviewData, recipients map[string][]string,
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// writeLetterHTML renders only the already-sanitized editor subset. It does
+// not interpret CSS or arbitrary HTML, keeping PDF rendering deterministic.
+func writeLetterHTML(pdf *gofpdf.Fpdf, bodyHTML, fallback string) error {
+	bodyHTML = strings.TrimSpace(bodyHTML)
+	if bodyHTML == "" {
+		bodyHTML = "<p>" + strings.TrimSpace(fallback) + "</p>"
+	}
+	document, err := html.Parse(strings.NewReader(bodyHTML))
+	if err != nil {
+		return fmt.Errorf("membaca isi surat: %w", err)
+	}
+	body := findHTMLElement(document, "body")
+	if body == nil {
+		return errors.New("isi surat tidak dapat dirender")
+	}
+	if strings.TrimSpace(nodePlainText(body)) == "" {
+		pdf.SetFont("Arial", "", 11)
+		pdf.MultiCell(0, 6, "(isi surat kosong)", "", "L", false)
+		return nil
+	}
+	for child := body.FirstChild; child != nil; child = child.NextSibling {
+		if err := writeLetterHTMLNode(pdf, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func configureLetterPDFLayout(pdf *gofpdf.Fpdf, snapshot []byte) {
+	const defaultMargin = 20.0
+	top, right, bottom, left := 18.0, defaultMargin, 18.0, defaultMargin
+	var config struct {
+		Layout struct {
+			Page struct {
+				MarginMM struct {
+					Top    float64 `json:"top"`
+					Right  float64 `json:"right"`
+					Bottom float64 `json:"bottom"`
+					Left   float64 `json:"left"`
+				} `json:"margin_mm"`
+			} `json:"page"`
+		} `json:"layout_config"`
+	}
+	if len(snapshot) > 0 && json.Unmarshal(snapshot, &config) == nil {
+		margin := config.Layout.Page.MarginMM
+		if margin.Top >= 8 && margin.Top <= 45 {
+			top = margin.Top
+		}
+		if margin.Right >= 8 && margin.Right <= 45 {
+			right = margin.Right
+		}
+		if margin.Bottom >= 8 && margin.Bottom <= 45 {
+			bottom = margin.Bottom
+		}
+		if margin.Left >= 8 && margin.Left <= 45 {
+			left = margin.Left
+		}
+	}
+	pdf.SetMargins(left, top, right)
+	pdf.SetAutoPageBreak(true, bottom)
+}
+
+func writeLetterHTMLNode(pdf *gofpdf.Fpdf, node *html.Node) error {
+	if node.Type == html.TextNode {
+		text := strings.TrimSpace(node.Data)
+		if text != "" {
+			pdf.SetFont("Arial", "", 11)
+			pdf.MultiCell(0, 6, text, "", "L", false)
+		}
+		return nil
+	}
+	if node.Type != html.ElementNode {
+		return nil
+	}
+
+	name := strings.ToLower(node.Data)
+	switch name {
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		size := 13.0
+		if name == "h1" {
+			size = 16
+		} else if name == "h2" {
+			size = 14
+		}
+		pdf.SetFont("Arial", "B", size)
+		pdf.MultiCell(0, 7, nodePlainText(node), "", htmlAlignment(node), false)
+		pdf.Ln(1)
+		return nil
+	case "p", "blockquote", "pre":
+		style := ""
+		if name == "blockquote" {
+			style = "I"
+		}
+		pdf.SetFont("Arial", style, 11)
+		pdf.MultiCell(0, 6, nodePlainText(node), "", htmlAlignment(node), false)
+		pdf.Ln(1)
+		return nil
+	case "ul", "ol":
+		index := 1
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type != html.ElementNode || strings.ToLower(child.Data) != "li" {
+				continue
+			}
+			prefix := "• "
+			if name == "ol" {
+				prefix = fmt.Sprintf("%d. ", index)
+				index++
+			}
+			pdf.SetFont("Arial", "", 11)
+			pdf.MultiCell(0, 6, prefix+nodePlainText(child), "", "L", false)
+		}
+		pdf.Ln(1)
+		return nil
+	case "table":
+		for row := node.FirstChild; row != nil; row = row.NextSibling {
+			if err := writeLetterTableRows(pdf, row); err != nil {
+				return err
+			}
+		}
+		pdf.Ln(1)
+		return nil
+	case "br":
+		pdf.Ln(6)
+		return nil
+	case "strong", "em", "u", "s", "code", "li", "th", "td", "tr", "thead", "tbody", "tfoot":
+		// These elements are rendered by their parent block/table.
+		return nil
+	default:
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if err := writeLetterHTMLNode(pdf, child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeLetterTableRows(pdf *gofpdf.Fpdf, node *html.Node) error {
+	if node.Type == html.ElementNode && strings.ToLower(node.Data) == "tr" {
+		cells := []string{}
+		for cell := node.FirstChild; cell != nil; cell = cell.NextSibling {
+			if cell.Type == html.ElementNode && (cell.Data == "td" || cell.Data == "th") {
+				cells = append(cells, nodePlainText(cell))
+			}
+		}
+		if len(cells) > 0 {
+			pdf.SetFont("Arial", "", 10)
+			pdf.MultiCell(0, 5, strings.Join(cells, " | "), "1", "L", false)
+		}
+		return nil
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if err := writeLetterTableRows(pdf, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func findHTMLElement(node *html.Node, name string) *html.Node {
+	if node.Type == html.ElementNode && strings.EqualFold(node.Data, name) {
+		return node
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if found := findHTMLElement(child, name); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func nodePlainText(node *html.Node) string {
+	parts := []string{}
+	var walk func(*html.Node)
+	walk = func(current *html.Node) {
+		if current.Type == html.TextNode {
+			if text := strings.TrimSpace(current.Data); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(node)
+	return strings.Join(parts, " ")
+}
+
+func htmlAlignment(node *html.Node) string {
+	for _, attribute := range node.Attr {
+		if attribute.Key == "style" {
+			if strings.Contains(attribute.Val, "text-align:center") {
+				return "C"
+			}
+			if strings.Contains(attribute.Val, "text-align:right") {
+				return "R"
+			}
+			if strings.Contains(attribute.Val, "text-align:justify") {
+				return "J"
+			}
+		}
+	}
+	return "L"
+}
+
+func writeApprovalSignaturesBlock(pdf *gofpdf.Fpdf, signatures []approvalPDFSignature) error {
+	if len(signatures) == 0 {
+		return nil
+	}
+
+	leftMargin, _, rightMargin, bottomMargin := pdf.GetMargins()
+	pageWidth, pageHeight := pdf.GetPageSize()
+	usableWidth := pageWidth - leftMargin - rightMargin
+	const gutter = 8.0
+	columnWidth := (usableWidth - gutter) / 2
+	const blockHeight = 38.0
+
+	if pdf.GetY()+blockHeight > pageHeight-bottomMargin {
+		pdf.AddPage()
+	}
+	pdf.SetFont("Arial", "B", 10)
+	pdf.CellFormat(0, 6, "Tanda tangan approval", "", 1, "L", false, 0, "")
+	pdf.Ln(2)
+
+	for i, signature := range signatures {
+		if i%2 == 0 && pdf.GetY()+blockHeight > pageHeight-bottomMargin {
+			pdf.AddPage()
+		}
+
+		rowY := pdf.GetY()
+		colX := leftMargin
+		if i%2 == 1 {
+			colX = leftMargin + columnWidth + gutter
+		}
+
+		pdf.SetXY(colX, rowY)
+		pdf.SetFont("Arial", "", 8)
+		title := strings.TrimSpace(signature.PositionTitle)
+		if title == "" {
+			title = fmt.Sprintf("Approval step %d", signature.StepOrder)
+		}
+		pdf.MultiCell(columnWidth, 4, title, "", "C", false)
+
+		imageY := rowY + 7
+		if len(signature.Image) > 0 {
+			imageName := fmt.Sprintf("approval-signature-%d-%d", signature.StepOrder, i)
+			options := gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}
+			if info := pdf.RegisterImageOptionsReader(imageName, options, bytes.NewReader(signature.Image)); info == nil {
+				if err := pdf.Error(); err != nil {
+					return fmt.Errorf("mendaftarkan gambar tanda tangan: %w", err)
+				}
+				return errors.New("gambar tanda tangan tidak dapat didaftarkan")
+			}
+			drawWidth, drawHeight := fitSignatureImage(signature.Image, columnWidth-8, 16)
+			pdf.ImageOptions(imageName, colX+(columnWidth-drawWidth)/2, imageY, drawWidth, drawHeight, false, options, 0, "")
+			if err := pdf.Error(); err != nil {
+				return fmt.Errorf("menulis gambar tanda tangan: %w", err)
+			}
+		}
+
+		pdf.SetXY(colX, imageY+18)
+		pdf.SetFont("Arial", "B", 8)
+		pdf.MultiCell(columnWidth, 4, strings.TrimSpace(signature.ActorName), "", "C", false)
+		pdf.SetX(colX)
+		pdf.SetFont("Arial", "I", 7)
+		pdf.MultiCell(columnWidth, 4, signature.ActedAt.Format("02/01/2006 15:04 MST"), "", "C", false)
+
+		if i%2 == 1 || i == len(signatures)-1 {
+			pdf.SetY(rowY + blockHeight)
+		}
+	}
+	return nil
+}
+
+func fitSignatureImage(data []byte, maxWidth float64, maxHeight float64) (float64, float64) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return maxWidth, maxHeight
+	}
+	width := maxWidth
+	height := width * float64(config.Height) / float64(config.Width)
+	if height > maxHeight {
+		height = maxHeight
+		width = height * float64(config.Width) / float64(config.Height)
+	}
+	return width, height
 }
 
 func writeLetterHeader(pdf *gofpdf.Fpdf, data draftPreviewData, companyLogo []byte) error {

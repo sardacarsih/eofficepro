@@ -8,6 +8,7 @@ import {
   BuildingIcon,
   CheckCircleIcon,
   CornerUpRightIcon,
+  DownloadIcon,
   InboxIcon,
   LayersIcon,
   LayoutDashboardIcon,
@@ -25,11 +26,20 @@ interface NavItem {
   icon: (props: IconProps) => React.ReactElement;
   /** null = tampil untuk semua role (mengikuti aturan navbar existing). */
   roles: string[] | null;
+  isVisible?: (user: User | null) => boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboardIcon, roles: null },
+  { href: "/management/effectiveness", label: "Efektivitas", icon: LayoutDashboardIcon, roles: ["admin", "management_viewer"] },
   { href: "/inbox", label: "Surat Masuk", icon: InboxIcon, roles: null },
+  {
+    href: "/audit-export",
+    label: "Ekspor Audit",
+    icon: DownloadIcon,
+    roles: null,
+    isVisible: (user) => user?.capabilities?.can_export_audit === true,
+  },
   {
     href: "/compose",
     label: "Tulis Surat",
@@ -40,12 +50,14 @@ const NAV_ITEMS: NavItem[] = [
     href: "/approvals",
     label: "Approval",
     icon: CheckCircleIcon,
-    roles: ["admin", "approver"],
+    roles: null,
+    isVisible: (user) => user?.capabilities?.can_approve === true,
   },
   { href: "/organization", label: "Organisasi", icon: BuildingIcon, roles: null },
   { href: "/companies", label: "Perusahaan", icon: BuildingIcon, roles: ["admin"] },
   { href: "/positions", label: "Jabatan", icon: BriefcaseIcon, roles: ["admin"] },
   { href: "/users", label: "Pengguna", icon: UsersIcon, roles: ["admin"] },
+  { href: "/audit-assignments", label: "Scope Audit", icon: BriefcaseIcon, roles: ["admin"] },
   { href: "/letter-types", label: "Jenis Surat", icon: TagIcon, roles: ["admin"] },
   {
     href: "/approval-matrices",
@@ -80,7 +92,7 @@ export default function Sidebar({
 
   const visibleItems = NAV_ITEMS.filter(
     (item) =>
-      item.roles === null ||
+      (item.isVisible ? item.isVisible(me) : item.roles === null) ||
       (me?.roles.some((role) => item.roles?.includes(role)) ?? false),
   );
 

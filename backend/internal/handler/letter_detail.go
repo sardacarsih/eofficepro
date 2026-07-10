@@ -54,14 +54,15 @@ type LetterApprovalStep struct {
 }
 
 type LetterApprovalAction struct {
-	ID            string    `json:"id"`
-	StepID        string    `json:"step_id"`
-	Action        string    `json:"action"`
-	ActorName     string    `json:"actor_name"`
-	Note          *string   `json:"note"`
-	DeviceInfo    *string   `json:"device_info"`
-	CreatedAt     time.Time `json:"created_at"`
-	PositionTitle string    `json:"position_title"`
+	ID               string    `json:"id"`
+	StepID           string    `json:"step_id"`
+	Action           string    `json:"action"`
+	ActorName        string    `json:"actor_name"`
+	Note             *string   `json:"note"`
+	DeviceInfo       *string   `json:"device_info"`
+	CreatedAt        time.Time `json:"created_at"`
+	PositionTitle    string    `json:"position_title"`
+	SignaturePresent bool      `json:"signature_present"`
 }
 
 func (h *Handler) GetLetterDetail(c *gin.Context) {
@@ -139,11 +140,7 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		verifyURL := h.verifyURL(*detail.QRToken)
 		detail.VerifyURL = &verifyURL
 	}
-	if finalPDFKey != nil && *finalPDFKey != "" && h.Minio != nil {
-		if finalPDFURL, err := h.presignedGetURL(ctx, *finalPDFKey); err == nil {
-			detail.FinalPDFURL = &finalPDFURL
-		}
-	}
+	_ = finalPDFKey // Download PDF selalu lewat endpoint terautentikasi.
 
 	recipients, ok := h.loadLetterRecipients(c, letterID)
 	if !ok {
@@ -176,11 +173,9 @@ func (h *Handler) userCanViewLetter(ctx context.Context, userID string, letterID
 	var allowed bool
 	err := h.DB.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1
-			FROM letters l
-			WHERE l.id = $1
-			  AND l.creator_user_id = $2
-		) OR EXISTS (
+			SELECT 1 FROM letters l
+			WHERE l.id = $1 AND (
+				l.creator_user_id = $2 OR EXISTS (
 			SELECT 1
 			FROM approval_steps s
 			JOIN user_positions up ON up.position_id = s.approver_position_id
@@ -191,18 +186,21 @@ func (h *Handler) userCanViewLetter(ctx context.Context, userID string, letterID
 		) OR EXISTS (
 			SELECT 1
 			FROM letter_recipients lr
-			WHERE lr.letter_id = $1
-			  AND `+recipientAccessSQL("$2")+`
+			WHERE lr.letter_id = l.id
+			  AND `+publishedRecipientAccessSQL("$2")+`
 		) OR EXISTS (
 			SELECT 1
 			FROM dispositions d
 			LEFT JOIN disposition_recipients dr ON dr.disposition_id = d.id
 			JOIN user_positions up
 			  ON up.position_id IN (d.from_position_id, dr.position_id)
-			WHERE d.letter_id = $1
+			WHERE d.letter_id = l.id
+			  AND l.classification <> 'rahasia'
 			  AND up.user_id = $2
 			  AND current_date >= up.valid_from
-			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+				  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+				) OR `+auditLetterAccessSQL("$2", "l")+`
+			)
 		)`, letterID, userID).Scan(&allowed)
 	return allowed, err
 }
@@ -287,7 +285,8 @@ func (h *Handler) loadLetterApprovalSteps(c *gin.Context, letterID string) ([]Le
 func (h *Handler) loadLetterApprovalActions(c *gin.Context, letterID string) ([]LetterApprovalAction, bool) {
 	rows, err := h.DB.Query(c.Request.Context(), `
 		SELECT aa.id::text, aa.approval_step_id::text, aa.action,
-		       u.full_name, aa.note, aa.device_info, aa.acted_at, p.title
+		       u.full_name, aa.note, aa.device_info, aa.acted_at, p.title,
+		       aa.signature_image_key IS NOT NULL
 		FROM approval_actions aa
 		JOIN approval_steps s ON s.id = aa.approval_step_id
 		JOIN users u ON u.id = aa.acted_by_user_id
@@ -312,6 +311,7 @@ func (h *Handler) loadLetterApprovalActions(c *gin.Context, letterID string) ([]
 			&action.DeviceInfo,
 			&action.CreatedAt,
 			&action.PositionTitle,
+			&action.SignaturePresent,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca aksi approval"})
 			return nil, false

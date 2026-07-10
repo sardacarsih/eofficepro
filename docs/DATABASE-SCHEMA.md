@@ -103,7 +103,7 @@ erDiagram
 | valid_from / valid_to | date / NULL | |
 
 ### `roles`, `user_roles`
-Role aplikasi: `admin, creator, approver, secretary, auditor`. Permission granular disimpan `roles.permissions jsonb` (v1 cukup; tabel permission terpisah bila kompleks).
+Role aplikasi: `admin, creator, secretary, auditor, management_viewer`. Otoritas approval berasal dari jabatan aktif yang ditetapkan pada workflow, bukan role aplikasi. Permission granular disimpan `roles.permissions jsonb` (v1 cukup; tabel permission terpisah bila kompleks).
 
 ### `delegations`
 | Kolom | Tipe | Ket |

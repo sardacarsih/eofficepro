@@ -41,9 +41,9 @@ import {
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin" },
   { value: "creator", label: "Creator" },
-  { value: "approver", label: "Approver" },
   { value: "secretary", label: "Secretary" },
   { value: "auditor", label: "Auditor" },
+  { value: "management_viewer", label: "Management Viewer" },
 ] as const;
 
 const STATUS_LABEL: Record<UserPayload["status"], string> = {
@@ -190,7 +190,8 @@ function formPositionPayloads(form: UserFormState): UserPositionPayload[] {
 }
 
 function positionLabel(position: Position): string {
-  return `${position.title} · ${position.org_unit_name}`;
+  const company = position.company_code ? `[${position.company_code}] · ` : "";
+  return `${company}${position.title} · ${position.org_unit_name}`;
 }
 
 function flattenOrgUnits(units: OrgUnit[]): OrgUnit[] {
@@ -226,6 +227,8 @@ function positionSearchText(position: Position): string {
   return [
     position.title,
     position.org_unit_name,
+    position.company_code,
+    position.company_name,
     position.position_type,
     POSITION_TYPE_LABEL[position.position_type],
     position.holder_name,
@@ -235,7 +238,8 @@ function positionSearchText(position: Position): string {
 }
 
 function assignmentLabel(position: UserPositionAssignment): string {
-  return `${position.title} · ${position.org_unit_name}`;
+  const company = position.company_code ? `[${position.company_code}] · ` : "";
+  return `${company}${position.title} · ${position.org_unit_name}`;
 }
 
 function roleLabel(role: string): string {

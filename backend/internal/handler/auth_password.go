@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,18 +15,44 @@ import (
 
 const (
 	sessionsPrefix = "sessions:" // Redis SET berisi refresh token aktif per pengguna
-	pwResetPrefix  = "pwreset:"
-	pwResetTTL     = 30 * time.Minute
+
+	// Suffix pada value refresh token yang menandai sesi "ingat saya".
+	// Value lama (userID polos) terbaca sebagai remember=false.
+	rememberSuffix = "|remember"
 )
 
+func (h *Handler) refreshTTL(remember bool) time.Duration {
+	if remember {
+		return time.Duration(h.Cfg.JWTRefreshRememberTTLHours) * time.Hour
+	}
+	return time.Duration(h.Cfg.JWTRefreshTTLHours) * time.Hour
+}
+
+func refreshValue(userID string, remember bool) string {
+	if remember {
+		return userID + rememberSuffix
+	}
+	return userID
+}
+
+func parseRefreshValue(v string) (userID string, remember bool) {
+	if id, ok := strings.CutSuffix(v, rememberSuffix); ok {
+		return id, true
+	}
+	return v, false
+}
+
 // storeRefresh menyimpan refresh token dan mendaftarkannya ke set sesi pengguna
-// agar "logout semua perangkat" bisa mencabut seluruhnya.
-func (h *Handler) storeRefresh(ctx context.Context, userID, token string) error {
-	ttl := time.Duration(h.Cfg.JWTRefreshTTLHours) * time.Hour
+// agar "logout semua perangkat" bisa mencabut seluruhnya. Flag remember
+// ("ingat saya") menentukan TTL dan ikut tersimpan di value agar bertahan
+// saat rotasi token.
+func (h *Handler) storeRefresh(ctx context.Context, userID, token string, remember bool) error {
 	pipe := h.Redis.TxPipeline()
-	pipe.Set(ctx, refreshPrefix+token, userID, ttl)
+	pipe.Set(ctx, refreshPrefix+token, refreshValue(userID, remember), h.refreshTTL(remember))
 	pipe.SAdd(ctx, sessionsPrefix+userID, token)
-	pipe.Expire(ctx, sessionsPrefix+userID, ttl)
+	// Set sesi selalu memakai TTL terpanjang: sesi pendek tidak boleh
+	// memperpendek umur set yang masih menampung token sesi "ingat saya".
+	pipe.Expire(ctx, sessionsPrefix+userID, h.refreshTTL(true))
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -110,7 +137,8 @@ type forgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
-// ForgotPassword (E01-8) — respons selalu sama, ada/tidaknya akun tidak bocor.
+// ForgotPassword (E01-8) — kirim kode OTP 6 digit via email untuk reset dari
+// aplikasi. Respons selalu sama, ada/tidaknya akun tidak bocor.
 func (h *Handler) ForgotPassword(c *gin.Context) {
 	var req forgotPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -118,7 +146,7 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	genericMsg := gin.H{"message": "jika email terdaftar, tautan reset password telah dikirim"}
+	genericMsg := gin.H{"message": "jika email terdaftar, kode reset password telah dikirim"}
 
 	var userID, fullName string
 	err := h.DB.QueryRow(ctx,
@@ -129,23 +157,38 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	token, err := auth.NewRefreshToken()
+	// Cooldown anti-spam: maksimal satu email per menit per akun,
+	// respons tetap generik agar tidak membocorkan keberadaan akun.
+	ok, err := h.Redis.SetNX(ctx, pwResetCooldownPrefix+userID, "1", pwResetResendCooldown).Result()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membuat token reset"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memproses permintaan"})
 		return
 	}
-	if err := h.Redis.Set(ctx, pwResetPrefix+token, userID, pwResetTTL).Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan token reset"})
+	if !ok {
+		c.JSON(http.StatusOK, genericMsg)
 		return
 	}
 
-	link := fmt.Sprintf("%s/reset-password?token=%s", h.Cfg.WebBaseURL, token)
+	code, err := generateOTP()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membuat kode reset"})
+		return
+	}
+	pipe := h.Redis.TxPipeline()
+	pipe.Set(ctx, pwResetOTPPrefix+userID, hashOTP(code), pwResetOTPTTL)
+	pipe.Del(ctx, pwResetAttemptsPrefix+userID) // kode baru = penghitung percobaan direset
+	if _, err := pipe.Exec(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan kode reset"})
+		return
+	}
+
 	body := fmt.Sprintf(
 		"Halo %s,\n\nKami menerima permintaan reset password akun eOffice Pro Anda.\n"+
-			"Buka tautan berikut dalam 30 menit:\n\n%s\n\n"+
+			"Masukkan kode berikut di aplikasi:\n\n%s\n\n"+
+			"Kode berlaku 10 menit dan hanya dapat digunakan sekali.\n"+
 			"Abaikan email ini jika Anda tidak meminta reset password.",
-		fullName, link)
-	if err := h.Mailer.Send(req.Email, "Reset Password eOffice Pro", body); err != nil {
+		fullName, code)
+	if err := h.Mailer.Send(req.Email, "Kode Reset Password eOffice Pro", body); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengirim email"})
 		return
 	}
@@ -155,23 +198,51 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 }
 
 type resetPasswordRequest struct {
-	Token       string `json:"token" binding:"required"`
+	Email       string `json:"email" binding:"required,email"`
+	Code        string `json:"code" binding:"required,len=6,numeric"`
 	NewPassword string `json:"new_password" binding:"required,min=10"`
 }
 
 func (h *Handler) ResetPassword(c *gin.Context) {
 	var req resetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "token wajib diisi dan password minimal 10 karakter"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email, kode 6 digit, dan password minimal 10 karakter wajib diisi"})
 		return
 	}
 	ctx := c.Request.Context()
+	// Error generik untuk email tak dikenal / kode salah / kode kedaluwarsa —
+	// tidak membocorkan keberadaan akun maupun status kode.
+	genericErr := gin.H{"error": "kode tidak valid atau sudah kedaluwarsa"}
 
-	userID, err := h.Redis.GetDel(ctx, pwResetPrefix+req.Token).Result() // sekali pakai
-	if err != nil || userID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "token reset tidak valid atau sudah kedaluwarsa"})
+	var userID string
+	if err := h.DB.QueryRow(ctx,
+		`SELECT id::text FROM users WHERE email = $1 AND status = 'active'`,
+		req.Email).Scan(&userID); err != nil {
+		c.JSON(http.StatusBadRequest, genericErr)
 		return
 	}
+
+	// Batasi percobaan verifikasi: 6 digit hanya 1 juta kombinasi.
+	attempts, err := h.Redis.Incr(ctx, pwResetAttemptsPrefix+userID).Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memproses permintaan"})
+		return
+	}
+	if attempts == 1 {
+		_ = h.Redis.Expire(ctx, pwResetAttemptsPrefix+userID, pwResetOTPTTL).Err()
+	}
+	if attempts > pwResetMaxAttempts {
+		_ = h.Redis.Del(ctx, pwResetOTPPrefix+userID).Err()
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "terlalu banyak percobaan, minta kode baru"})
+		return
+	}
+
+	storedHash, err := h.Redis.Get(ctx, pwResetOTPPrefix+userID).Result()
+	if err != nil || !otpMatches(storedHash, req.Code) {
+		c.JSON(http.StatusBadRequest, genericErr)
+		return
+	}
+	_ = h.Redis.Del(ctx, pwResetOTPPrefix+userID, pwResetAttemptsPrefix+userID, pwResetCooldownPrefix+userID).Err()
 
 	hash, err := auth.HashPassword(req.NewPassword)
 	if err != nil {

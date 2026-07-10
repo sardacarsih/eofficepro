@@ -23,7 +23,7 @@ func (h *Handler) ImportTemplate(c *gin.Context) {
 	f := excelize.NewFile()
 	sheet := f.GetSheetName(0)
 	_ = f.SetSheetRow(sheet, "A1", &importColumns)
-	example := []string{"EMP001", "budi@ksk.co.id", "Budi Santoso", "PasswordAwal#01", "creator,approver", "IT-SW", "Staff IT Software"}
+	example := []string{"EMP001", "budi@ksk.co.id", "Budi Santoso", "PasswordAwal#01", "creator", "IT-SW", "Staff IT Software"}
 	_ = f.SetSheetRow(sheet, "A2", &example)
 
 	c.Header("Content-Disposition", `attachment; filename="template-import-pengguna.xlsx"`)

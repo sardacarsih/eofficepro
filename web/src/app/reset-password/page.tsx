@@ -6,7 +6,9 @@ import { useSearchParams } from "next/navigation";
 import { resetPassword } from "@/lib/api";
 
 function ResetPasswordForm() {
-  const token = useSearchParams().get("token") ?? "";
+  const initialEmail = useSearchParams().get("email") ?? "";
+  const [email, setEmail] = useState(initialEmail);
+  const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -22,20 +24,12 @@ function ResetPasswordForm() {
     }
     setLoading(true);
     try {
-      setMessage(await resetPassword(token, password));
+      setMessage(await resetPassword(email, code, password));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset password gagal");
     } finally {
       setLoading(false);
     }
-  }
-
-  if (!token) {
-    return (
-      <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-        Tautan tidak lengkap — buka kembali tautan dari email Anda.
-      </p>
-    );
   }
 
   return (
@@ -44,6 +38,34 @@ function ResetPasswordForm() {
       className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
     >
       <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        Email
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          autoFocus={!initialEmail}
+          className="rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        Kode 6 digit dari email
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]{6}"
+          maxLength={6}
+          value={code}
+          onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, ""))}
+          required
+          autoFocus={!!initialEmail}
+          autoComplete="one-time-code"
+          className="rounded-lg border border-zinc-300 px-3 py-2 tracking-[0.3em] text-zinc-900 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
         Password baru (min. 10 karakter)
         <input
           type="password"
@@ -51,7 +73,6 @@ function ResetPasswordForm() {
           onChange={(e) => setPassword(e.target.value)}
           required
           minLength={10}
-          autoFocus
           autoComplete="new-password"
           className="rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
         />
@@ -110,7 +131,8 @@ export default function ResetPasswordPage() {
             Atur Password Baru
           </h1>
           <p className="text-sm text-zinc-500">
-            Setelah berhasil, semua sesi lama akan keluar otomatis.
+            Masukkan kode dari email Anda. Setelah berhasil, semua sesi lama
+            akan keluar otomatis.
           </p>
         </div>
         <Suspense>

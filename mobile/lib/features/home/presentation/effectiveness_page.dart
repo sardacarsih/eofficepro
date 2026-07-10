@@ -1,0 +1,14 @@
+import 'package:eoffice_mobile/features/home/data/effectiveness_repository.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+class EffectivenessPage extends ConsumerStatefulWidget { const EffectivenessPage({super.key}); @override ConsumerState<EffectivenessPage> createState()=>_EffectivenessPageState(); }
+class _EffectivenessPageState extends ConsumerState<EffectivenessPage> {
+  late DateTime _from, _to;
+  @override void initState(){super.initState(); _to=DateTime.now(); _from=_to.subtract(const Duration(days:30));}
+  @override Widget build(BuildContext context){ final filter=EffectivenessFilter(from:_from,to:_to); final async=ref.watch(effectivenessProvider(filter)); return Scaffold(appBar:AppBar(title:const Text('Efektivitas aplikasi')),body:RefreshIndicator(onRefresh:()=>ref.refresh(effectivenessProvider(filter).future),child:ListView(padding:const EdgeInsets.all(20),children:[Text('Baseline penggunaan dan kinerja proses',style:Theme.of(context).textTheme.bodyMedium),const SizedBox(height:16),Wrap(spacing:8,runSpacing:8,children:[OutlinedButton.icon(onPressed:()=>_pick(true),icon:const Icon(Icons.calendar_today_outlined),label:Text(_date(_from))),OutlinedButton.icon(onPressed:()=>_pick(false),icon:const Icon(Icons.event_outlined),label:Text(_date(_to)))]),const SizedBox(height:20),async.when(loading:()=>const Center(child:CircularProgressIndicator()),error:(e,_)=>Text(e.toString()),data:(d)=>_grid(d))]))); }
+  Widget _grid(EffectivenessSummary d)=>GridView.count(crossAxisCount:MediaQuery.sizeOf(context).width>=600?3:2,shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),crossAxisSpacing:12,mainAxisSpacing:12,childAspectRatio:1.55,children:[_card('Pengguna aktif','${d.activeUsers}/${d.registeredUsers}'),_card('Surat dibuat','${d.lettersCreated}'),_card('Surat terbit','${d.lettersPublished}'),_card('Approval selesai','${d.approvalActions}'),_card('Approval tertunda','${d.pendingApprovals}'),_card('Lewat SLA','${d.overdueApprovals}'),_card('Notifikasi dibaca','${d.readNotifications}/${d.totalNotifications}')]);
+  Widget _card(String label,String value)=>Card(child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[Text(label,style:Theme.of(context).textTheme.bodySmall),const SizedBox(height:8),Text(value,style:Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight:FontWeight.w700))])));
+  Future<void> _pick(bool from) async { final picked=await showDatePicker(context:context,initialDate:from?_from:_to,firstDate:DateTime(2020),lastDate:DateTime.now()); if(picked!=null)setState(()=>from?_from=picked:_to=picked); }
+  String _date(DateTime d)=>'${d.day.toString().padLeft(2,'0')}/${d.month.toString().padLeft(2,'0')}/${d.year}';
+}

@@ -190,14 +190,14 @@ func main() {
 
 	creatorPositionID := positions.DeptHeads["DEP-IT-SW"]
 	ensureUserPosition(ctx, db, userID, creatorPositionID)
-	approverID := ensureDevUser(ctx, db, "APR001", getenv("APPROVER_EMAIL", "approver@ksk.local"), "Approver Development", password, []string{"approver"})
+	approverID := ensureDevUser(ctx, db, "APR001", getenv("APPROVER_EMAIL", "approver@ksk.local"), "Approver Development", password, nil)
 	ensureUserPosition(ctx, db, approverID, positions.Directors["DIR-IS"])
 
 	divisionCreatorID := ensureDevUser(ctx, db, "DIV001", getenv("DIVISION_CREATOR_EMAIL", "division.creator@ksk.local"), "Division Creator Finance", password, []string{"creator"})
 	ensureUserPosition(ctx, db, divisionCreatorID, positions.DivisionHeads["DIV-FA-R1-FIN"])
-	deptApproverID := ensureDevUser(ctx, db, "DFA001", getenv("DEPT_APPROVER_EMAIL", "dept.approver.fa@ksk.local"), "Department Approver Finance Regional I", password, []string{"approver"})
+	deptApproverID := ensureDevUser(ctx, db, "DFA001", getenv("DEPT_APPROVER_EMAIL", "dept.approver.fa@ksk.local"), "Department Approver Finance Regional I", password, nil)
 	ensureUserPosition(ctx, db, deptApproverID, positions.DeptHeads["DEP-FA-R1"])
-	directorApproverID := ensureDevUser(ctx, db, "DIRFA001", getenv("DIRECTOR_FA_EMAIL", "director.fa@ksk.local"), "Director Approver Finance", password, []string{"approver"})
+	directorApproverID := ensureDevUser(ctx, db, "DIRFA001", getenv("DIRECTOR_FA_EMAIL", "director.fa@ksk.local"), "Director Approver Finance", password, nil)
 	ensureUserPosition(ctx, db, directorApproverID, positions.Directors["DIR-FA"])
 	seedGMUsers(ctx, db, password, positions)
 	seedSecretaryUsers(ctx, db, password, positions)
@@ -226,7 +226,7 @@ func seedGMUsers(ctx context.Context, db *pgxpool.Pool, password string, positio
 		if !ok {
 			log.Fatalf("seed user gm untuk %s belum dikonfigurasi", biroCode)
 		}
-		userID := ensureDevUser(ctx, db, user.nik, user.email, user.fullName, password, []string{"approver"})
+		userID := ensureDevUser(ctx, db, user.nik, user.email, user.fullName, password, nil)
 		ensureUserPosition(ctx, db, userID, gmPositionID)
 	}
 }
@@ -340,6 +340,9 @@ func ensureDevUser(ctx context.Context, db *pgxpool.Pool, nik string, email stri
 }
 
 func ensureUserRoles(ctx context.Context, db *pgxpool.Pool, userID string, roles []string) {
+	if len(roles) == 0 {
+		return
+	}
 	if _, err := db.Exec(ctx, `
 		INSERT INTO user_roles (user_id, role_id)
 		SELECT $1, id

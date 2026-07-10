@@ -5,8 +5,11 @@ import Link from "next/link";
 import RichTextEditor from "@/components/RichTextEditor";
 import {
   createDraftLetter,
+	  ApiError,
   deleteDraftAttachment,
+  downloadAuthenticatedFile,
   getOrgTree,
+	  getDraftLetter,
   listAllCompanies,
   listDraftAttachments,
   listDraftLetters,
@@ -83,7 +86,7 @@ function draftToForm(draft: DraftLetter, positions: Position[] = []): ComposerFo
     id: draft.id,
     company_id: draft.company_id,
     letter_type_id: draft.letter_type_id,
-    template_id: "",
+    template_id: draft.template_id ?? "",
     creator_position_id: draft.creator_position_id,
     on_behalf_of_position_id:
       draft.on_behalf_of_position_id ??
@@ -128,7 +131,9 @@ function compactPayload(form: ComposerForm): DraftLetterPayload {
     company_id: form.company_id,
     letter_type_id: form.letter_type_id,
     creator_position_id: form.creator_position_id,
-    on_behalf_of_position_id: form.on_behalf_of_position_id || null,
+	    on_behalf_of_position_id: form.on_behalf_of_position_id || null,
+	    template_id: form.template_id || null,
+	    base_version: form.id ? form.version : undefined,
     subject: form.subject.trim(),
     classification: form.classification,
     priority: form.priority,
@@ -572,12 +577,25 @@ export default function ComposePage() {
       await Promise.all([reloadDrafts(), reloadMyLetters()]);
       return result.id;
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && form.id) {
+        try {
+          const latest = await getDraftLetter(form.id);
+          setForm(draftToForm(latest.letter, recipientPositions));
+          await reloadAttachments(form.id);
+          setDirty(false);
+          setError("Draft diperbarui dari versi terbaru karena ada perubahan di perangkat lain.");
+        } catch {
+          setError("Draft berubah di perangkat lain. Muat ulang sebelum menyimpan kembali.");
+        }
+        setSaveState("error");
+        return null;
+      }
       const message = err instanceof Error ? err.message : "Gagal menyimpan draft";
       setSaveState("error");
       if (mode === "manual") setError(message);
       return null;
     }
-  }, [form, recipientPolicyErrors, reloadDrafts, reloadMyLetters]);
+  }, [form, recipientPolicyErrors, recipientPositions, reloadAttachments, reloadDrafts, reloadMyLetters]);
 
   useEffect(() => {
     if (!dirty || !form || !validForSave(form) || recipientPolicyErrors.length > 0) return;
@@ -1109,15 +1127,17 @@ export default function ComposePage() {
                             </p>
                           </div>
                           <div className="flex items-center gap-2 text-xs">
-                            {attachment.download_url && (
-                              <a
-                                href={attachment.download_url}
-                                target="_blank"
-                                rel="noreferrer"
+							{form.id && attachment.scan_status === "clean" && (
+							  <button
+							    type="button"
+							    onClick={() => void downloadAuthenticatedFile(
+							      `/letters/drafts/${form.id}/attachments/${attachment.id}/download`,
+							      attachment.file_name,
+							    )}
                                 className="rounded-lg border border-zinc-300 px-3 py-1.5 font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                              >
-                                Buka
-                              </a>
+							  >
+							    Buka
+							  </button>
                             )}
                             <button
                               type="button"

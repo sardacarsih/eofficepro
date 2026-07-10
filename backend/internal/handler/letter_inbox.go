@@ -85,7 +85,7 @@ func (h *Handler) ListIncomingLetters(c *gin.Context) {
 		) a ON true
 		WHERE l.status = 'published'
 		  ` + filterSQL + `
-		  AND ` + recipientAccessSQL("$1") + `
+		  AND ` + publishedRecipientAccessSQL("$1") + `
 		ORDER BY l.id, lr.recipient_type, l.published_at DESC NULLS LAST, l.updated_at DESC`
 
 	ctx := c.Request.Context()
@@ -153,7 +153,20 @@ func (h *Handler) userCanReceivePublishedLetter(ctx context.Context, userID stri
 			JOIN letters l ON l.id = lr.letter_id
 			WHERE lr.letter_id = $1
 			  AND l.status = 'published'
-			  AND `+recipientAccessSQL("$2")+`
+			  AND `+publishedRecipientAccessSQL("$2")+`
+		)`, letterID, userID).Scan(&allowed)
+	return allowed, err
+}
+
+func (h *Handler) userIsLetterRecipient(ctx context.Context, userID string, letterID string) (bool, error) {
+	var allowed bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM letter_recipients lr
+			JOIN letters l ON l.id = lr.letter_id
+			WHERE lr.letter_id = $1
+			  AND `+publishedRecipientAccessSQL("$2")+`
 		)`, letterID, userID).Scan(&allowed)
 	return allowed, err
 }
@@ -249,7 +262,7 @@ func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, 
 			  AND u.status = 'active'
 		),
 		letter_data AS (
-			SELECT subject
+			SELECT subject, classification
 			FROM letters
 			WHERE id = $1
 		),
@@ -265,6 +278,7 @@ func distributePublishedLetter(ctx context.Context, tx pgx.Tx, letterID string, 
 			       END
 			FROM target_users tu
 			CROSS JOIN letter_data ld
+			WHERE ld.classification <> 'rahasia' OR tu.recipient_type = 'to'
 			RETURNING user_id, event_type, letter_id, title, body
 		)
 		SELECT u.email, i.event_type, i.letter_id::text, i.title, i.body
@@ -308,5 +322,15 @@ func recipientAccessSQL(userParam string) string {
 			FROM ancestors
 			WHERE ancestors.id = lr.org_unit_id
 		)
+	)`
+}
+
+// publishedRecipientAccessSQL applies the additional classification rule for
+// published letters: confidential letters are only available to primary (To)
+// recipients. Workflow approvers use their separate access path.
+func publishedRecipientAccessSQL(userParam string) string {
+	return `(
+		` + recipientAccessSQL(userParam) + `
+		AND (l.classification <> 'rahasia' OR lr.recipient_type = 'to')
 	)`
 }

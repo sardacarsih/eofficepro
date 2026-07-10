@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -33,6 +34,7 @@ type DraftLetter struct {
 	CreatorPositionTitle string           `json:"creator_position_title"`
 	OnBehalfOfPositionID *string          `json:"on_behalf_of_position_id"`
 	OnBehalfOfTitle      *string          `json:"on_behalf_of_title"`
+	TemplateID           *string          `json:"template_id"`
 	Version              int              `json:"version"`
 	BodyHTML             string           `json:"body_html"`
 	BodyPlain            string           `json:"body_plain"`
@@ -53,6 +55,8 @@ type draftLetterRequest struct {
 	LetterTypeID         string                  `json:"letter_type_id"`
 	CreatorPositionID    string                  `json:"creator_position_id"`
 	OnBehalfOfPositionID *string                 `json:"on_behalf_of_position_id"`
+	TemplateID           *string                 `json:"template_id"`
+	BaseVersion          *int                    `json:"base_version"`
 	Subject              string                  `json:"subject"`
 	Classification       string                  `json:"classification"`
 	Priority             string                  `json:"priority"`
@@ -165,7 +169,7 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	if ok, err := h.userCanUsePosition(ctx, userID, req.CreatorPositionID); err != nil || !ok {
+	if ok, err := h.userCanUsePositionForCompany(ctx, userID, req.CreatorPositionID, req.CompanyID); err != nil || !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jabatan pembuat tidak valid untuk pengguna ini"})
 		return
 	}
@@ -189,13 +193,19 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	templateVersion, templateSnapshot, err := loadDraftTemplateSnapshot(ctx, tx, req.TemplateID, req.CompanyID, req.LetterTypeID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	var id string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO letters
 			(company_id, letter_type_id, subject, classification, priority,
-			 creator_user_id, creator_position_id, on_behalf_of_position_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 creator_user_id, creator_position_id, on_behalf_of_position_id,
+			 template_id, template_version, template_snapshot)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id::text`,
 		req.CompanyID,
 		req.LetterTypeID,
@@ -205,6 +215,9 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 		userID,
 		req.CreatorPositionID,
 		req.OnBehalfOfPositionID,
+		req.TemplateID,
+		templateVersion,
+		templateSnapshot,
 	).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gagal membuat draft (perusahaan atau jenis surat tidak valid)"})
@@ -255,7 +268,7 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	if ok, err := h.userCanUsePosition(ctx, userID, req.CreatorPositionID); err != nil || !ok {
+	if ok, err := h.userCanUsePositionForCompany(ctx, userID, req.CreatorPositionID, req.CompanyID); err != nil || !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jabatan pembuat tidak valid untuk pengguna ini"})
 		return
 	}
@@ -279,7 +292,8 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 	err = tx.QueryRow(ctx, `
 		SELECT status
 		FROM letters
-		WHERE id = $1 AND creator_user_id = $2`, id, userID).Scan(&currentStatus)
+		WHERE id = $1 AND creator_user_id = $2
+		FOR UPDATE`, id, userID).Scan(&currentStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "draft surat tidak ditemukan"})
 		return
@@ -301,23 +315,33 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		return
 	}
 
-	var nextVersion int
-	err = tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(version), 0) + 1
-		FROM letter_versions
-		WHERE letter_id = $1`, id).Scan(&nextVersion)
+	var currentVersion int
+	err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM letter_versions WHERE letter_id = $1`, id).Scan(&currentVersion)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menentukan versi draft"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca versi draft"})
 		return
 	}
+	if req.BaseVersion == nil || *req.BaseVersion != currentVersion {
+		c.JSON(http.StatusConflict, gin.H{"error": "draft telah berubah di perangkat lain; muat ulang sebelum menyimpan", "current_version": currentVersion})
+		return
+	}
+
+	templateVersion, templateSnapshot, err := loadDraftTemplateSnapshot(ctx, tx, req.TemplateID, req.CompanyID, req.LetterTypeID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	nextVersion := currentVersion + 1
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE letters
 		SET company_id = $2, letter_type_id = $3, subject = $4,
 		    classification = $5, priority = $6, creator_position_id = $7,
-		    on_behalf_of_position_id = $8,
+		    on_behalf_of_position_id = $8, template_id = $9,
+		    template_version = $10, template_snapshot = $11,
 		    updated_at = now()
-		WHERE id = $1 AND creator_user_id = $9`,
+		WHERE id = $1 AND creator_user_id = $12`,
 		id,
 		req.CompanyID,
 		req.LetterTypeID,
@@ -326,6 +350,9 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		req.Priority,
 		req.CreatorPositionID,
 		req.OnBehalfOfPositionID,
+		req.TemplateID,
+		templateVersion,
+		templateSnapshot,
 		userID,
 	)
 	if err != nil {
@@ -378,6 +405,17 @@ func normalizeDraftLetterRequest(req *draftLetterRequest) error {
 			req.OnBehalfOfPositionID = &value
 		}
 	}
+	if req.TemplateID != nil {
+		value := strings.TrimSpace(*req.TemplateID)
+		if value == "" {
+			req.TemplateID = nil
+		} else {
+			req.TemplateID = &value
+		}
+	}
+	if req.BaseVersion != nil && *req.BaseVersion < 0 {
+		return errors.New("base_version tidak valid")
+	}
 	req.Subject = strings.TrimSpace(req.Subject)
 	req.Classification = strings.ToLower(strings.TrimSpace(req.Classification))
 	req.Priority = strings.ToLower(strings.TrimSpace(req.Priority))
@@ -415,6 +453,40 @@ func normalizeDraftLetterRequest(req *draftLetterRequest) error {
 		return errors.New("isi surat wajib diisi")
 	}
 	return nil
+}
+
+// loadDraftTemplateSnapshot keeps a chosen template stable after administrators
+// publish a newer template. Legacy drafts may omit template_id intentionally.
+func loadDraftTemplateSnapshot(ctx context.Context, tx pgx.Tx, templateID *string, companyID, letterTypeID string) (*int, []byte, error) {
+	if templateID == nil {
+		return nil, nil, nil
+	}
+	var version int
+	var layout []byte
+	var bodySkeleton string
+	err := tx.QueryRow(ctx, `
+		SELECT version, layout_config, body_skeleton
+		FROM letter_templates
+		WHERE id = $1 AND company_id = $2 AND letter_type_id = $3 AND is_active`,
+		*templateID, companyID, letterTypeID).Scan(&version, &layout, &bodySkeleton)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, errors.New("template surat tidak aktif atau tidak sesuai perusahaan dan jenis surat")
+	}
+	if err != nil {
+		return nil, nil, errors.New("gagal memvalidasi template surat")
+	}
+	var layoutConfig map[string]any
+	if err := json.Unmarshal(layout, &layoutConfig); err != nil {
+		return nil, nil, errors.New("layout template tidak valid")
+	}
+	snapshot, err := json.Marshal(map[string]any{
+		"layout_config": layoutConfig,
+		"body_skeleton": bodySkeleton,
+	})
+	if err != nil {
+		return nil, nil, errors.New("gagal membuat snapshot template")
+	}
+	return &version, snapshot, nil
 }
 
 func normalizeDraftRecipients(recipients []draftRecipientRequest) error {
@@ -632,17 +704,24 @@ func insertDraftRecipients(ctx context.Context, tx pgx.Tx, letterID string, reci
 	return nil
 }
 
-func (h *Handler) userCanUsePosition(ctx context.Context, userID string, positionID string) (bool, error) {
+func (h *Handler) userCanUsePositionForCompany(ctx context.Context, userID string, positionID string, companyID string) (bool, error) {
 	var exists bool
 	err := h.DB.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1
-			FROM user_positions
-			WHERE user_id = $1
-			  AND position_id = $2
-			  AND current_date >= valid_from
-			  AND (valid_to IS NULL OR current_date < valid_to)
-		)`, userID, positionID).Scan(&exists)
+			FROM user_positions assignment
+			JOIN positions position ON position.id = assignment.position_id
+			JOIN org_units unit ON unit.id = position.org_unit_id
+			JOIN companies company ON company.id = unit.company_id
+			WHERE assignment.user_id = $1
+			  AND assignment.position_id = $2
+			  AND unit.company_id = $3
+			  AND position.is_active
+			  AND unit.is_active
+			  AND company.is_active
+			  AND current_date >= assignment.valid_from
+			  AND (assignment.valid_to IS NULL OR current_date < assignment.valid_to)
+		)`, userID, positionID, companyID).Scan(&exists)
 	return exists, err
 }
 
@@ -662,6 +741,7 @@ func draftLetterSelect(suffix string) string {
 		       l.letter_number, l.subject, l.classification, l.priority, l.status,
 		       l.creator_position_id::text, p.title,
 		       l.on_behalf_of_position_id::text, obp.title,
+		       l.template_id::text,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''),
 		       COALESCE(v.body_plain, ''), l.created_at, l.updated_at
 		FROM letters l
@@ -700,6 +780,7 @@ func scanDraftLetters(c *gin.Context, rows pgx.Rows) ([]DraftLetter, bool) {
 			&letter.CreatorPositionTitle,
 			&letter.OnBehalfOfPositionID,
 			&letter.OnBehalfOfTitle,
+			&letter.TemplateID,
 			&letter.Version,
 			&letter.BodyHTML,
 			&letter.BodyPlain,

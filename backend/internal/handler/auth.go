@@ -19,6 +19,7 @@ const (
 type loginRequest struct {
 	Identifier string `json:"identifier" binding:"required"` // email atau NIK
 	Password   string `json:"password" binding:"required"`
+	RememberMe bool   `json:"remember_me"` // opsional: sesi panjang ("ingat saya")
 }
 
 func (h *Handler) Login(c *gin.Context) {
@@ -85,7 +86,7 @@ func (h *Handler) Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menerbitkan refresh token"})
 		return
 	}
-	if err := h.storeRefresh(ctx, id, refresh); err != nil {
+	if err := h.storeRefresh(ctx, id, refresh, req.RememberMe); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan sesi"})
 		return
 	}
@@ -111,11 +112,12 @@ func (h *Handler) Refresh(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 
-	userID, err := h.Redis.GetDel(ctx, refreshPrefix+req.RefreshToken).Result() // rotasi: sekali pakai
-	if err != nil || userID == "" {
+	stored, err := h.Redis.GetDel(ctx, refreshPrefix+req.RefreshToken).Result() // rotasi: sekali pakai
+	if err != nil || stored == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "sesi tidak valid, silakan login ulang"})
 		return
 	}
+	userID, remember := parseRefreshValue(stored)
 	_ = h.Redis.SRem(ctx, sessionsPrefix+userID, req.RefreshToken).Err()
 
 	var fullName, status string
@@ -141,7 +143,8 @@ func (h *Handler) Refresh(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menerbitkan refresh token"})
 		return
 	}
-	if err := h.storeRefresh(ctx, userID, newRefresh); err != nil {
+	// Pilihan "ingat saya" ikut berpindah ke token baru saat rotasi.
+	if err := h.storeRefresh(ctx, userID, newRefresh, remember); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan sesi"})
 		return
 	}
@@ -157,7 +160,8 @@ func (h *Handler) Logout(c *gin.Context) {
 	var req refreshRequest
 	if err := c.ShouldBindJSON(&req); err == nil && req.RefreshToken != "" {
 		ctx := c.Request.Context()
-		if userID, err := h.Redis.GetDel(ctx, refreshPrefix+req.RefreshToken).Result(); err == nil && userID != "" {
+		if stored, err := h.Redis.GetDel(ctx, refreshPrefix+req.RefreshToken).Result(); err == nil && stored != "" {
+			userID, _ := parseRefreshValue(stored)
 			_ = h.Redis.SRem(ctx, sessionsPrefix+userID, req.RefreshToken).Err()
 		}
 	}
@@ -177,28 +181,53 @@ func (h *Handler) Me(c *gin.Context) {
 	}
 
 	roles, _ := h.userRoles(ctx, userID)
+	canApprove, err := h.userHasPendingApproval(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa otoritas approval"})
+		return
+	}
+	canExportAudit, err := h.userHasAuditExport(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa otoritas ekspor audit"})
+		return
+	}
 
 	type positionInfo struct {
 		PositionID   string `json:"position_id"`
 		Title        string `json:"title"`
 		PositionType string `json:"position_type"`
 		OrgUnit      string `json:"org_unit"`
+		CompanyID    string `json:"company_id"`
+		CompanyCode  string `json:"company_code"`
+		CompanyName  string `json:"company_name"`
 		Assignment   string `json:"assignment_type"`
 	}
 	positions := []positionInfo{}
 	rows, err := h.DB.Query(ctx, `
-		SELECT p.id::text, p.title, p.position_type, ou.name, up.assignment_type
+		SELECT p.id::text, p.title, p.position_type, ou.name,
+		       company.id::text, company.code, company.name, up.assignment_type
 		FROM user_positions up
 		JOIN positions p ON p.id = up.position_id
 		JOIN org_units ou ON ou.id = p.org_unit_id
+		JOIN companies company ON company.id = ou.company_id
 		WHERE up.user_id = $1
 		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date < up.valid_to)`, userID)
+		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+		  AND p.is_active AND ou.is_active AND company.is_active`, userID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var p positionInfo
-			if rows.Scan(&p.PositionID, &p.Title, &p.PositionType, &p.OrgUnit, &p.Assignment) == nil {
+			if rows.Scan(
+				&p.PositionID,
+				&p.Title,
+				&p.PositionType,
+				&p.OrgUnit,
+				&p.CompanyID,
+				&p.CompanyCode,
+				&p.CompanyName,
+				&p.Assignment,
+			) == nil {
 				positions = append(positions, p)
 			}
 		}
@@ -207,5 +236,6 @@ func (h *Handler) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"id": userID, "nik": nik, "email": email, "full_name": fullName,
 		"status": status, "roles": roles, "positions": positions,
+		"capabilities": gin.H{"can_approve": canApprove, "can_export_audit": canExportAudit},
 	})
 }

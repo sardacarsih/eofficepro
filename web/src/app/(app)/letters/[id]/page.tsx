@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import {
   ApiError,
   createDisposition,
+	  downloadAuthenticatedFile,
   getLetterDetail,
   listLetterDispositions,
   listAllPositions,
@@ -431,15 +432,17 @@ export default function LetterDetailPage() {
               <h2 className="mb-3 text-sm font-semibold text-zinc-950 dark:text-zinc-50">
                 Verifikasi
               </h2>
-              {letter.final_pdf_url && (
-                <a
-                  href={letter.final_pdf_url}
-                  target="_blank"
-                  rel="noreferrer"
+			  {letter.status === "published" && (
+				<button
+				  type="button"
+				  onClick={() => void downloadAuthenticatedFile(
+					`/letters/view/${letter.id}/final-pdf`,
+					`${letter.letter_number ?? "surat"}.pdf`,
+				  )}
                   className="mb-2 inline-flex rounded-lg border border-zinc-900 bg-zinc-900 px-3 py-2 text-sm font-semibold text-white hover:bg-zinc-800 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                >
-                  Buka PDF Final
-                </a>
+				>
+				  Buka PDF Final
+				</button>
               )}
               {letter.verify_url ? (
                 <a
@@ -474,15 +477,17 @@ export default function LetterDetailPage() {
                     <p className="mt-1 text-xs text-zinc-500">
                       {formatBytes(attachment.size_bytes)} · scan {attachment.scan_status}
                     </p>
-                    {attachment.download_url && (
-                      <a
-                        href={attachment.download_url}
-                        target="_blank"
-                        rel="noreferrer"
+					{attachment.scan_status === "clean" && (
+					  <button
+						type="button"
+						onClick={() => void downloadAuthenticatedFile(
+						  `/letters/view/${letter.id}/attachments/${attachment.id}/download`,
+						  attachment.file_name,
+						)}
                         className="mt-2 inline-flex rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      >
-                        Buka
-                      </a>
+					  >
+						Buka
+					  </button>
                     )}
                   </div>
                 ))}
