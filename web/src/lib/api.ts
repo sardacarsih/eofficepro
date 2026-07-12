@@ -21,7 +21,10 @@ export interface User {
   capabilities?: {
     can_approve: boolean;
     can_export_audit: boolean;
+    is_super_admin: boolean;
   };
+  accessible_companies?: AccessibleCompany[];
+  company_roles?: UserCompanyRoleAssignment[];
   positions?: {
     position_id: string;
     title: string;
@@ -36,6 +39,9 @@ export interface User {
 
 export interface OrgUnit {
   id: string;
+	company_id: string;
+	company_code: string;
+	company_name: string;
   parent_id: string | null;
   code: string;
   name: string;
@@ -781,6 +787,22 @@ export async function downloadAuthenticatedFile(path: string, fallbackName: stri
   URL.revokeObjectURL(url);
 }
 
+export interface AccessibleCompany {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface UserCompanyRoleAssignment {
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  role_code: "admin";
+  valid_from: string;
+  valid_to: string | null;
+}
+
 export interface ApprovalCategory {
   id: string;
   code: string;
@@ -1281,6 +1303,7 @@ export interface UserRow {
   status: string;
   roles: string[];
   positions: UserPositionAssignment[];
+  company_roles: UserCompanyRoleAssignment[];
 }
 
 export interface UserPositionAssignment {
@@ -1305,6 +1328,12 @@ export interface UserPayload {
   roles: string[];
   password?: string;
   positions: UserPositionPayload[];
+  company_roles: UserCompanyRolePayload[];
+}
+
+export interface UserCompanyRolePayload {
+  company_id: string;
+  role_code: "admin";
 }
 
 export interface UserPositionPayload {

@@ -48,13 +48,16 @@ export default function ApprovalPoliciesPage() {
   }, []);
 
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) router.replace("/dashboard");
+		if (me && !me.capabilities?.is_super_admin) router.replace("/dashboard");
   }, [me, router]);
 
   useEffect(() => {
-    void reload().catch((reason: unknown) =>
-      setError(reason instanceof Error ? reason.message : "Gagal memuat kebijakan approval"),
-    );
+		const timer = window.setTimeout(() => {
+			void reload().catch((reason: unknown) =>
+				setError(reason instanceof Error ? reason.message : "Gagal memuat kebijakan approval"),
+			);
+		}, 0);
+		return () => window.clearTimeout(timer);
   }, [reload]);
 
   async function saveCategory(event: FormEvent) {

@@ -79,7 +79,7 @@ export default function CompaniesPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) {
+		if (me && !me.capabilities?.is_super_admin && !me.company_roles?.some((role) => role.role_code === "admin")) {
       router.replace("/organization");
     }
   }, [me, router]);
@@ -312,14 +312,16 @@ export default function CompaniesPage() {
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={openCreate}
-              className="flex items-center gap-2 rounded-lg bg-navy-700 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-800"
-            >
-              <PlusIcon className="h-4 w-4" />
-              Tambah
-            </button>
+            {me?.capabilities?.is_super_admin && (
+              <button
+                type="button"
+                onClick={openCreate}
+                className="flex items-center gap-2 rounded-lg bg-navy-700 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-800"
+              >
+                <PlusIcon className="h-4 w-4" />
+                Tambah
+              </button>
+            )}
           </div>
         </div>
 

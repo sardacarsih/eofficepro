@@ -69,9 +69,13 @@ function emptyForm(
 ): ComposerForm {
   const firstType = letterTypes[0];
   const creatorPositionID = user?.positions?.[0]?.position_id ?? "";
+	const creatorCompanyID = user?.positions?.[0]?.company_id ?? "";
   return {
     id: null,
-    company_id: companies[0]?.id ?? "",
+		company_id:
+			companies.find((company) => company.id === creatorCompanyID)?.id ??
+			companies[0]?.id ??
+			"",
     letter_type_id: firstType?.id ?? "",
     template_id: "",
     creator_position_id: creatorPositionID,
@@ -328,17 +332,27 @@ export default function ComposePage() {
           myLetterData,
           categoryData,
         ]) => {
-        setCompanies(companyData.data);
+			const operationalCompanyIDs = new Set(
+				(me.positions ?? []).map((position) => position.company_id),
+			);
+			const operationalCompanies = companyData.data.filter((company) =>
+				operationalCompanyIDs.has(company.id),
+			);
+			setCompanies(operationalCompanies);
         setRecipientPositions(positionData.data);
         setRecipientOrgUnits(flattenOrgUnits(orgData.tree));
         setLetterTypes(typeData.data);
-        setTemplates(templateData.data);
+			setTemplates(
+				templateData.data.filter((template) =>
+					operationalCompanyIDs.has(template.company_id),
+				),
+			);
         setDrafts(draftData.letters);
         setMyLetters(myLetterData.data);
         setApprovalCategories(categoryData.data);
         setForm(
           emptyForm(
-            companyData.data,
+				operationalCompanies,
             typeData.data,
             me,
             positionData.data,
@@ -358,8 +372,8 @@ export default function ComposePage() {
   useEffect(() => {
     if (!form || !form.letter_type_id || !form.creator_position_id) return;
     if (selectedLetterType?.code === "PRS" && !form.approval_category_id) {
-      setRoutePreview(null);
-      return;
+			const timer = window.setTimeout(() => setRoutePreview(null), 0);
+			return () => window.clearTimeout(timer);
     }
     const timer = window.setTimeout(() => {
       void previewApprovalRoute({
@@ -380,8 +394,7 @@ export default function ComposePage() {
       });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [form?.letter_type_id, form?.creator_position_id, form?.approval_category_id,
-    form?.requested_final_level, form?.recipients, selectedLetterType?.code]);
+  }, [form, selectedLetterType?.code]);
 
   const matchingTemplates = useMemo(() => {
     if (!form) return [];
@@ -734,7 +747,7 @@ export default function ComposePage() {
   }
 
   const canCompose =
-    me?.roles.some((role) => ["admin", "creator", "secretary"].includes(role)) ?? false;
+		me?.roles.some((role) => ["super_admin", "creator", "secretary"].includes(role)) ?? false;
   const creatorPositions = me?.positions ?? [];
   const canStartNewDraft = !loading && canCompose && creatorPositions.length > 0;
 

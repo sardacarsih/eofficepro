@@ -91,7 +91,7 @@ export default function LetterTypesPage() {
 
   // Halaman khusus admin — alihkan role lain setelah profil termuat.
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) {
+		if (me && !me.capabilities?.is_super_admin) {
       router.replace("/organization");
     }
   }, [me, router]);

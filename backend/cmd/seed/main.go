@@ -293,7 +293,7 @@ func ensureAdminUser(ctx context.Context, db *pgxpool.Pool, email string, passwo
 		WHERE nik = 'ADM001' OR email = $1
 		LIMIT 1`, email).Scan(&userID)
 	if err == nil {
-		ensureUserRoles(ctx, db, userID, []string{"admin", "creator"})
+		ensureUserRoles(ctx, db, userID, []string{"super_admin", "creator"})
 		return userID
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -310,7 +310,7 @@ func ensureAdminUser(ctx context.Context, db *pgxpool.Pool, email string, passwo
 		email, hash).Scan(&userID); err != nil {
 		log.Fatalf("insert admin: %v", err)
 	}
-	ensureUserRoles(ctx, db, userID, []string{"admin", "creator"})
+	ensureUserRoles(ctx, db, userID, []string{"super_admin", "creator"})
 	return userID
 }
 

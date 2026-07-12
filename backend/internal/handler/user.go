@@ -21,9 +21,40 @@ func (h *Handler) ListUsers(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	actor := c.GetString(middleware.CtxUserID)
+	isSuperAdmin, err := h.userIsSuperAdmin(ctx, actor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses administrator"})
+		return
+	}
+	assignments, err := h.companyRoles(ctx, actor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses perusahaan"})
+		return
+	}
+	companyIDs := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		if assignment.RoleCode == "admin" {
+			companyIDs = append(companyIDs, assignment.CompanyID)
+		}
+	}
+	userScopeSQL := `(
+		$1 OR EXISTS (
+			SELECT 1 FROM user_positions scope_up
+			JOIN positions scope_p ON scope_p.id = scope_up.position_id
+			JOIN org_units scope_ou ON scope_ou.id = scope_p.org_unit_id
+			WHERE scope_up.user_id = u.id AND scope_ou.company_id::text = ANY($2::text[])
+			  AND current_date >= scope_up.valid_from
+			  AND (scope_up.valid_to IS NULL OR current_date < scope_up.valid_to)
+		) OR EXISTS (
+			SELECT 1 FROM user_company_roles scope_ucr
+			WHERE scope_ucr.user_id = u.id AND scope_ucr.company_id::text = ANY($2::text[])
+			  AND current_date >= scope_ucr.valid_from
+			  AND (scope_ucr.valid_to IS NULL OR current_date < scope_ucr.valid_to)
+		))`
 
 	var total int64
-	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&total); err != nil {
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM users u WHERE `+userScopeSQL, isSuperAdmin, companyIDs).Scan(&total); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung pengguna"})
 		return
 	}
@@ -31,7 +62,8 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT u.id::text, u.nik, u.email, u.full_name, u.status,
 		       COALESCE(user_roles.roles, '{}'::text[]),
-		       COALESCE(user_positions.positions, '[]'::jsonb)
+		       COALESCE(user_positions.positions, '[]'::jsonb),
+		       COALESCE(company_roles.assignments, '[]'::jsonb)
 		FROM users u
 		LEFT JOIN LATERAL (
 			SELECT array_agg(DISTINCT r.code ORDER BY r.code) AS roles
@@ -61,12 +93,31 @@ func (h *Handler) ListUsers(c *gin.Context) {
 			JOIN org_units ou ON ou.id = p.org_unit_id
 			JOIN companies company ON company.id = ou.company_id
 			WHERE up.user_id = u.id
+			  AND ($1 OR company.id::text = ANY($2::text[]))
 			  AND current_date >= up.valid_from
 			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
 			  AND p.is_active
 		) user_positions ON true
+		LEFT JOIN LATERAL (
+			SELECT jsonb_agg(jsonb_build_object(
+				'company_id', company.id::text,
+				'company_code', company.code,
+				'company_name', company.name,
+				'role_code', r.code,
+				'valid_from', ucr.valid_from::text,
+				'valid_to', ucr.valid_to::text
+			) ORDER BY company.code, r.code) AS assignments
+			FROM user_company_roles ucr
+			JOIN companies company ON company.id = ucr.company_id
+			JOIN roles r ON r.id = ucr.role_id
+			WHERE ucr.user_id = u.id
+			  AND ($1 OR company.id::text = ANY($2::text[]))
+			  AND current_date >= ucr.valid_from
+			  AND (ucr.valid_to IS NULL OR current_date < ucr.valid_to)
+		) company_roles ON true
+		WHERE `+userScopeSQL+`
 		ORDER BY u.full_name
-		LIMIT $1 OFFSET $2`, pageSize, offset)
+		LIMIT $3 OFFSET $4`, isSuperAdmin, companyIDs, pageSize, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat pengguna"})
 		return
@@ -74,24 +125,29 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	defer rows.Close()
 
 	type user struct {
-		ID        string                   `json:"id"`
-		NIK       string                   `json:"nik"`
-		Email     string                   `json:"email"`
-		FullName  string                   `json:"full_name"`
-		Status    string                   `json:"status"`
-		Roles     []string                 `json:"roles"`
-		Positions []userPositionAssignment `json:"positions"`
+		ID           string                   `json:"id"`
+		NIK          string                   `json:"nik"`
+		Email        string                   `json:"email"`
+		FullName     string                   `json:"full_name"`
+		Status       string                   `json:"status"`
+		Roles        []string                 `json:"roles"`
+		Positions    []userPositionAssignment `json:"positions"`
+		CompanyRoles []companyRoleAssignment  `json:"company_roles"`
 	}
 	users := []user{}
 	for rows.Next() {
 		var u user
-		var positionsJSON []byte
-		if err := rows.Scan(&u.ID, &u.NIK, &u.Email, &u.FullName, &u.Status, &u.Roles, &positionsJSON); err != nil {
+		var positionsJSON, companyRolesJSON []byte
+		if err := rows.Scan(&u.ID, &u.NIK, &u.Email, &u.FullName, &u.Status, &u.Roles, &positionsJSON, &companyRolesJSON); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca data pengguna"})
 			return
 		}
 		if err := json.Unmarshal(positionsJSON, &u.Positions); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca jabatan pengguna"})
+			return
+		}
+		if err := json.Unmarshal(companyRolesJSON, &u.CompanyRoles); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca role perusahaan pengguna"})
 			return
 		}
 		users = append(users, u)
@@ -122,14 +178,20 @@ type userPositionPayload struct {
 	AssignmentType string `json:"assignment_type"`
 }
 
+type userCompanyRolePayload struct {
+	CompanyID string `json:"company_id"`
+	RoleCode  string `json:"role_code"`
+}
+
 type createUserRequest struct {
-	NIK       string                `json:"nik" binding:"required"`
-	Email     string                `json:"email" binding:"required,email"`
-	FullName  string                `json:"full_name" binding:"required"`
-	Password  string                `json:"password" binding:"required,min=10"`
-	Roles     []string              `json:"roles" binding:"required,min=1"`
-	Status    string                `json:"status"`
-	Positions []userPositionPayload `json:"positions"`
+	NIK          string                    `json:"nik" binding:"required"`
+	Email        string                    `json:"email" binding:"required,email"`
+	FullName     string                    `json:"full_name" binding:"required"`
+	Password     string                    `json:"password" binding:"required,min=10"`
+	Roles        []string                  `json:"roles" binding:"required,min=1"`
+	Status       string                    `json:"status"`
+	Positions    []userPositionPayload     `json:"positions"`
+	CompanyRoles *[]userCompanyRolePayload `json:"company_roles"`
 }
 
 func (h *Handler) CreateUser(c *gin.Context) {
@@ -159,7 +221,18 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "role creator wajib memiliki minimal satu jabatan aktif"})
 		return
 	}
+	companyRoles := []userCompanyRolePayload{}
+	if req.CompanyRoles != nil {
+		companyRoles, err = normalizeUserCompanyRoles(*req.CompanyRoles)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	ctx := c.Request.Context()
+	if !h.validateUserAdministrationScope(c, "", roles, positions, companyRoles) {
+		return
+	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
@@ -197,24 +270,32 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := syncUserCompanyRoles(ctx, tx, id, c.GetString(middleware.CtxUserID), companyRoles); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan pengguna"})
 		return
 	}
 
 	actor := c.GetString(middleware.CtxUserID)
-	h.audit(ctx, "user", &id, "create", &actor, map[string]any{"nik": req.NIK, "roles": roles, "status": req.Status}, c.ClientIP())
+	h.audit(ctx, "user", &id, "create", &actor, map[string]any{"nik": req.NIK, "roles": roles, "company_roles": companyRoles, "status": req.Status}, c.ClientIP())
+	if len(companyRoles) > 0 {
+		h.audit(ctx, "user_company_role", &id, "sync", &actor, map[string]any{"assignments": companyRoles}, c.ClientIP())
+	}
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
 type updateUserRequest struct {
-	NIK       string                `json:"nik" binding:"required"`
-	Email     string                `json:"email" binding:"required,email"`
-	FullName  string                `json:"full_name" binding:"required"`
-	Password  string                `json:"password"`
-	Roles     []string              `json:"roles" binding:"required,min=1"`
-	Status    string                `json:"status" binding:"required,oneof=active inactive locked"`
-	Positions []userPositionPayload `json:"positions"`
+	NIK          string                    `json:"nik" binding:"required"`
+	Email        string                    `json:"email" binding:"required,email"`
+	FullName     string                    `json:"full_name" binding:"required"`
+	Password     string                    `json:"password"`
+	Roles        []string                  `json:"roles" binding:"required,min=1"`
+	Status       string                    `json:"status" binding:"required,oneof=active inactive locked"`
+	Positions    []userPositionPayload     `json:"positions"`
+	CompanyRoles *[]userCompanyRolePayload `json:"company_roles"`
 }
 
 func (h *Handler) UpdateUser(c *gin.Context) {
@@ -244,12 +325,23 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "role creator wajib memiliki minimal satu jabatan aktif"})
 		return
 	}
+	companyRoles := []userCompanyRolePayload{}
+	if req.CompanyRoles != nil {
+		companyRoles, err = normalizeUserCompanyRoles(*req.CompanyRoles)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if !h.validateUserAdministrationScope(c, id, roles, positions, companyRoles) {
+		return
+	}
 	if id == actor && req.Status != "active" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tidak bisa menonaktifkan akun sendiri"})
 		return
 	}
-	if id == actor && !hasRole(roles, "admin") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tidak bisa menghapus role admin dari akun sendiri"})
+	if id == actor && !hasRole(roles, "super_admin") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tidak bisa menghapus role super admin dari akun sendiri"})
 		return
 	}
 
@@ -321,6 +413,12 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.CompanyRoles != nil {
+		if err := syncUserCompanyRoles(ctx, tx, id, actor, companyRoles); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan pengguna"})
 		return
@@ -337,7 +435,11 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		"roles":            roles,
 		"status":           req.Status,
 		"password_changed": passwordHash != "",
+		"company_roles":    companyRoles,
 	}, c.ClientIP())
+	if req.CompanyRoles != nil {
+		h.audit(ctx, "user_company_role", &id, "sync", &actor, map[string]any{"assignments": companyRoles}, c.ClientIP())
+	}
 	c.JSON(http.StatusOK, gin.H{"id": id})
 }
 
@@ -391,6 +493,9 @@ type deactivateUserRequest struct {
 
 func (h *Handler) DeactivationImpact(c *gin.Context) {
 	id := c.Param("id")
+	if !h.validateUserAdministrationScope(c, id, nil, nil, nil) {
+		return
+	}
 	ctx := c.Request.Context()
 
 	tx, err := h.DB.Begin(ctx)
@@ -416,6 +521,9 @@ func (h *Handler) DeactivationImpact(c *gin.Context) {
 // draft/revisi, request harus menyertakan pengganti eksplisit.
 func (h *Handler) DeactivateUser(c *gin.Context) {
 	id := c.Param("id")
+	if !h.validateUserAdministrationScope(c, id, nil, nil, nil) {
+		return
+	}
 	actor := c.GetString(middleware.CtxUserID)
 	if id == actor {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tidak bisa menonaktifkan akun sendiri"})
@@ -499,6 +607,116 @@ func normalizeUserPositionPayloads(input []userPositionPayload) ([]userPositionP
 		positions = append(positions, position)
 	}
 	return positions, nil
+}
+
+func normalizeUserCompanyRoles(input []userCompanyRolePayload) ([]userCompanyRolePayload, error) {
+	seen := map[string]bool{}
+	result := make([]userCompanyRolePayload, 0, len(input))
+	for _, assignment := range input {
+		assignment.CompanyID = strings.TrimSpace(assignment.CompanyID)
+		assignment.RoleCode = strings.ToLower(strings.TrimSpace(assignment.RoleCode))
+		if assignment.CompanyID == "" {
+			return nil, errors.New("perusahaan assignment admin wajib dipilih")
+		}
+		if assignment.RoleCode == "" {
+			assignment.RoleCode = "admin"
+		}
+		if assignment.RoleCode != "admin" {
+			return nil, errors.New("role perusahaan tidak dikenal: " + assignment.RoleCode)
+		}
+		key := assignment.CompanyID + ":" + assignment.RoleCode
+		if seen[key] {
+			return nil, errors.New("assignment role perusahaan tidak boleh duplikat")
+		}
+		seen[key] = true
+		result = append(result, assignment)
+	}
+	return result, nil
+}
+
+func (h *Handler) validateUserAdministrationScope(c *gin.Context, targetUserID string, roles []string, positions []userPositionPayload, companyRoles []userCompanyRolePayload) bool {
+	ctx := c.Request.Context()
+	actor := c.GetString(middleware.CtxUserID)
+	isSuperAdmin, err := h.userIsSuperAdmin(ctx, actor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses administrator"})
+		return false
+	}
+	if isSuperAdmin {
+		return true
+	}
+	if hasRole(roles, "admin") || hasRole(roles, "super_admin") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "company admin tidak dapat memberikan role global admin"})
+		return false
+	}
+	if targetUserID != "" {
+		var targetPrivileged bool
+		if err := h.DB.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+			WHERE ur.user_id = $1 AND r.code IN ('admin', 'super_admin'))`, targetUserID).Scan(&targetPrivileged); err != nil || targetPrivileged {
+			c.JSON(http.StatusForbidden, gin.H{"error": "company admin tidak dapat mengelola administrator global"})
+			return false
+		}
+		var outsideScope bool
+		err := h.DB.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM (
+					SELECT ou.company_id FROM user_positions up
+					JOIN positions p ON p.id = up.position_id JOIN org_units ou ON ou.id = p.org_unit_id
+					WHERE up.user_id = $2 AND current_date >= up.valid_from
+					  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+					UNION
+					SELECT company_id FROM user_company_roles
+					WHERE user_id = $2 AND current_date >= valid_from
+					  AND (valid_to IS NULL OR current_date < valid_to)
+				) target_scope
+				WHERE NOT EXISTS (
+					SELECT 1 FROM user_company_roles actor_scope JOIN roles r ON r.id = actor_scope.role_id
+					WHERE actor_scope.user_id = $1 AND actor_scope.company_id = target_scope.company_id
+					  AND r.code = 'admin' AND current_date >= actor_scope.valid_from
+					  AND (actor_scope.valid_to IS NULL OR current_date < actor_scope.valid_to)
+				)
+			)`, actor, targetUserID).Scan(&outsideScope)
+		if err != nil || outsideScope {
+			c.JSON(http.StatusForbidden, gin.H{"error": "pengguna memiliki assignment di luar cakupan administrasi Anda"})
+			return false
+		}
+	}
+	for _, position := range positions {
+		var companyID string
+		if err := h.DB.QueryRow(ctx, `SELECT ou.company_id::text FROM positions p JOIN org_units ou ON ou.id = p.org_unit_id WHERE p.id = $1`, position.PositionID).Scan(&companyID); err != nil || !h.requireAdminCompany(c, companyID) {
+			return false
+		}
+	}
+	for _, assignment := range companyRoles {
+		if !h.requireAdminCompany(c, assignment.CompanyID) {
+			return false
+		}
+	}
+	return true
+}
+
+func syncUserCompanyRoles(ctx context.Context, tx pgx.Tx, userID string, actorID string, assignments []userCompanyRolePayload) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE user_company_roles SET valid_to = current_date
+		WHERE user_id = $1 AND current_date >= valid_from
+		  AND (valid_to IS NULL OR current_date < valid_to)`, userID); err != nil {
+		return errors.New("gagal mengakhiri assignment perusahaan lama")
+	}
+	for _, assignment := range assignments {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO user_company_roles (user_id, company_id, role_id, created_by)
+			SELECT $1, c.id, r.id, $4
+			FROM companies c CROSS JOIN roles r
+			WHERE c.id = $2 AND c.is_active AND r.code = $3
+			ON CONFLICT (user_id, company_id, role_id, valid_from)
+			DO UPDATE SET valid_to = NULL, created_by = EXCLUDED.created_by`,
+			userID, assignment.CompanyID, assignment.RoleCode, actorID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return errors.New("perusahaan atau role assignment tidak valid")
+		}
+	}
+	return nil
 }
 
 func syncUserPositions(ctx context.Context, tx pgx.Tx, userID string, positions []userPositionPayload) error {

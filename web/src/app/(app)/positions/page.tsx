@@ -301,7 +301,7 @@ export default function PositionsPage() {
   }
 
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) {
+		if (me && !me.capabilities?.is_super_admin && !me.company_roles?.some((role) => role.role_code === "admin")) {
       router.replace("/organization");
     }
   }, [me, router]);

@@ -51,8 +51,37 @@ func (h *Handler) ListLetterTemplates(c *gin.Context) {
 		return
 	}
 
-	args := []any{}
-	where := []string{}
+	accessible, err := h.accessibleCompanies(c.Request.Context(), c.GetString(middleware.CtxUserID), false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses perusahaan"})
+		return
+	}
+	companyIDs := make([]string, 0, len(accessible))
+	for _, company := range accessible {
+		companyIDs = append(companyIDs, company.ID)
+	}
+	if includeInactive {
+		isSuperAdmin, checkErr := h.userIsSuperAdmin(c.Request.Context(), c.GetString(middleware.CtxUserID))
+		if checkErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses administrator"})
+			return
+		}
+		if !isSuperAdmin {
+			assignments, checkErr := h.companyRoles(c.Request.Context(), c.GetString(middleware.CtxUserID))
+			if checkErr != nil || len(assignments) == 0 {
+				c.JSON(http.StatusForbidden, gin.H{"error": "hanya admin yang dapat melihat template nonaktif"})
+				return
+			}
+			companyIDs = companyIDs[:0]
+			for _, assignment := range assignments {
+				if assignment.RoleCode == "admin" {
+					companyIDs = append(companyIDs, assignment.CompanyID)
+				}
+			}
+		}
+	}
+	args := []any{companyIDs}
+	where := []string{"t.company_id::text = ANY($1::text[])"}
 	if !includeInactive {
 		where = append(where, "t.is_active")
 	}
@@ -116,6 +145,9 @@ func (h *Handler) CreateLetterTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !h.requireAdminCompany(c, req.CompanyID) {
+		return
+	}
 
 	ctx := c.Request.Context()
 	tx, err := h.DB.Begin(ctx)
@@ -175,6 +207,10 @@ func (h *Handler) CreateLetterTemplate(c *gin.Context) {
 
 func (h *Handler) UpdateLetterTemplate(c *gin.Context) {
 	id := c.Param("id")
+	oldCompanyID, ok := h.requireAdminResourceCompany(c, `SELECT company_id::text FROM letter_templates WHERE id = $1`, id)
+	if !ok {
+		return
+	}
 	var req letterTemplateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "data template tidak valid: " + err.Error()})
@@ -184,6 +220,10 @@ func (h *Handler) UpdateLetterTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !h.requireAdminCompany(c, req.CompanyID) {
+		return
+	}
+	_ = oldCompanyID
 
 	ctx := c.Request.Context()
 	tx, err := h.DB.Begin(ctx)
@@ -249,6 +289,9 @@ func (h *Handler) UpdateLetterTemplate(c *gin.Context) {
 
 func (h *Handler) ActivateLetterTemplate(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT company_id::text FROM letter_templates WHERE id = $1`, id); !ok {
+		return
+	}
 	ctx := c.Request.Context()
 	tx, err := h.DB.Begin(ctx)
 	if err != nil {
@@ -290,6 +333,9 @@ func (h *Handler) ActivateLetterTemplate(c *gin.Context) {
 
 func (h *Handler) DeactivateLetterTemplate(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT company_id::text FROM letter_templates WHERE id = $1`, id); !ok {
+		return
+	}
 	ctx := c.Request.Context()
 
 	tag, err := h.DB.Exec(ctx, `UPDATE letter_templates SET is_active = false WHERE id = $1 AND is_active`, id)

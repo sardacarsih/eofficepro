@@ -36,6 +36,47 @@ func (h *Handler) ListPositions(c *gin.Context) {
 	orgUnitID := c.Query("org_unit_id")
 	includeInactive := c.Query("include_inactive") == "true"
 	ctx := c.Request.Context()
+	userID := c.GetString(middleware.CtxUserID)
+
+	companies, err := h.accessibleCompanies(ctx, userID, false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses perusahaan"})
+		return
+	}
+	if includeInactive {
+		isSuperAdmin, checkErr := h.userIsSuperAdmin(ctx, userID)
+		if checkErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses administrator"})
+			return
+		}
+		if isSuperAdmin {
+			companies, err = h.accessibleCompanies(ctx, userID, true)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses perusahaan"})
+				return
+			}
+		} else {
+			assignments, assignmentErr := h.companyRoles(ctx, userID)
+			if assignmentErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses administrator"})
+				return
+			}
+			companies = companies[:0]
+			for _, assignment := range assignments {
+				if assignment.RoleCode == "admin" {
+					companies = append(companies, accessibleCompany{ID: assignment.CompanyID})
+				}
+			}
+			if len(companies) == 0 {
+				c.JSON(http.StatusForbidden, gin.H{"error": "hanya admin yang dapat melihat jabatan nonaktif"})
+				return
+			}
+		}
+	}
+	companyIDs := make([]string, 0, len(companies))
+	for _, company := range companies {
+		companyIDs = append(companyIDs, company.ID)
+	}
 
 	page, pageSize, offset, ok := parsePagination(c.Query("page"), c.Query("page_size"))
 	if !ok {
@@ -43,8 +84,8 @@ func (h *Handler) ListPositions(c *gin.Context) {
 		return
 	}
 
-	whereSQL := " WHERE true"
-	args := []any{}
+	whereSQL := " WHERE ou.company_id::text = ANY($1::text[])"
+	args := []any{companyIDs}
 	if !includeInactive {
 		whereSQL += ` AND p.is_active`
 	}
@@ -282,6 +323,11 @@ func (h *Handler) CreatePosition(c *gin.Context) {
 		return
 	}
 	normalizePositionRequest(&req)
+	companyID, ok := h.requireAdminResourceCompany(c, `SELECT company_id::text FROM org_units WHERE id = $1 AND is_active`, req.OrgUnitID)
+	if !ok {
+		return
+	}
+	_ = companyID
 	ctx := c.Request.Context()
 
 	tx, err := h.DB.Begin(ctx)
@@ -319,12 +365,21 @@ func (h *Handler) CreatePosition(c *gin.Context) {
 
 func (h *Handler) UpdatePosition(c *gin.Context) {
 	id := c.Param("id")
+	existingCompanyID, ok := h.requireAdminResourceCompany(c, `SELECT ou.company_id::text FROM positions p JOIN org_units ou ON ou.id = p.org_unit_id WHERE p.id = $1`, id)
+	if !ok {
+		return
+	}
 	var req positionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "data jabatan tidak lengkap: " + err.Error()})
 		return
 	}
 	normalizePositionRequest(&req)
+	var requestedCompanyID string
+	if err := h.DB.QueryRow(c.Request.Context(), `SELECT company_id::text FROM org_units WHERE id = $1`, req.OrgUnitID).Scan(&requestedCompanyID); err != nil || requestedCompanyID != existingCompanyID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "jabatan tidak dapat dipindahkan ke perusahaan lain"})
+		return
+	}
 	ctx := c.Request.Context()
 
 	tx, err := h.DB.Begin(ctx)
@@ -481,6 +536,9 @@ func positionIdentityLocked(ctx context.Context, db positionQueryer, positionID 
 
 func (h *Handler) PositionDeactivationImpact(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT ou.company_id::text FROM positions p JOIN org_units ou ON ou.id = p.org_unit_id WHERE p.id = $1`, id); !ok {
+		return
+	}
 	ctx := c.Request.Context()
 
 	var exists bool
@@ -502,6 +560,9 @@ func (h *Handler) PositionDeactivationImpact(c *gin.Context) {
 
 func (h *Handler) DeactivatePosition(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT ou.company_id::text FROM positions p JOIN org_units ou ON ou.id = p.org_unit_id WHERE p.id = $1`, id); !ok {
+		return
+	}
 	ctx := c.Request.Context()
 
 	tx, err := h.DB.Begin(ctx)
@@ -550,6 +611,9 @@ func (h *Handler) DeactivatePosition(c *gin.Context) {
 
 func (h *Handler) ActivatePosition(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT ou.company_id::text FROM positions p JOIN org_units ou ON ou.id = p.org_unit_id WHERE p.id = $1`, id); !ok {
+		return
+	}
 	ctx := c.Request.Context()
 
 	tx, err := h.DB.Begin(ctx)
@@ -612,6 +676,9 @@ type assignRequest struct {
 // (bila ada) ditutup masa berlakunya per hari ini.
 func (h *Handler) AssignPosition(c *gin.Context) {
 	positionID := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT ou.company_id::text FROM positions p JOIN org_units ou ON ou.id = p.org_unit_id WHERE p.id = $1`, positionID); !ok {
+		return
+	}
 	var req assignRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id wajib diisi"})
@@ -662,6 +729,9 @@ func (h *Handler) AssignPosition(c *gin.Context) {
 
 func (h *Handler) EndUserPositionAssignment(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.requireAdminResourceCompany(c, `SELECT ou.company_id::text FROM user_positions up JOIN positions p ON p.id = up.position_id JOIN org_units ou ON ou.id = p.org_unit_id WHERE up.id = $1`, id); !ok {
+		return
+	}
 	actor := c.GetString(middleware.CtxUserID)
 	ctx := c.Request.Context()
 

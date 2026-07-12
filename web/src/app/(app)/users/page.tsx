@@ -9,6 +9,7 @@ import {
   getOrgTree,
   getUserDeactivationImpact,
   importUsers,
+	listAllCompanies,
   listAllPositions,
   listUsers,
   updateUser,
@@ -17,11 +18,13 @@ import {
   type ImportResult,
   type OrgUnit,
   type PageMeta,
+	type Company,
   type Position,
   type UserPayload,
   type UserPositionAssignment,
   type UserPositionPayload,
   type UserRow,
+	type UserCompanyRoleAssignment,
 } from "@/lib/api";
 import Pagination from "@/components/Pagination";
 import {
@@ -39,7 +42,7 @@ import {
 } from "@/components/layout/icons";
 
 const ROLE_OPTIONS = [
-  { value: "admin", label: "Admin" },
+	{ value: "super_admin", label: "Super Admin" },
   { value: "creator", label: "Creator" },
   { value: "secretary", label: "Secretary" },
   { value: "auditor", label: "Auditor" },
@@ -116,6 +119,7 @@ interface UserFormState {
   full_name: string;
   status: UserPayload["status"];
   roles: string[];
+	company_roles: UserCompanyRoleAssignment[];
   password: string;
   positions: UserPositionAssignment[];
   ended_assignment_ids: string[];
@@ -133,6 +137,7 @@ function emptyForm(): UserFormState {
     full_name: "",
     status: "active",
     roles: ["creator"],
+		company_roles: [],
     password: "",
     positions: [],
     ended_assignment_ids: [],
@@ -151,6 +156,7 @@ function userToForm(user: UserRow): UserFormState {
     full_name: user.full_name,
     status: user.status as UserPayload["status"],
     roles: user.roles.length > 0 ? user.roles : ["creator"],
+		company_roles: user.company_roles ?? [],
     password: "",
     positions: user.positions ?? [],
     ended_assignment_ids: [],
@@ -169,6 +175,10 @@ function compactPayload(form: UserFormState): UserPayload {
     full_name: form.full_name.trim(),
     status: form.status,
     roles: form.roles,
+		company_roles: form.company_roles.map((assignment) => ({
+			company_id: assignment.company_id,
+			role_code: "admin" as const,
+		})),
     positions: formPositionPayloads(form),
     ...(form.password.trim() ? { password: form.password } : {}),
   };
@@ -299,6 +309,7 @@ export default function UsersPage() {
   const [meta, setMeta] = useState<PageMeta | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnit[]>([]);
+	const [companies, setCompanies] = useState<Company[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -313,31 +324,38 @@ export default function UsersPage() {
   const modalOpen = editing !== null || form !== null;
 
   async function reload() {
-    const [userData, positionData, orgData] = await Promise.all([
+		const [userData, positionData, orgData, companyData] = await Promise.all([
       listUsers({ page }),
       listAllPositions(),
       getOrgTree(),
+			listAllCompanies(),
     ]);
     setUsers(userData.data);
     setMeta(userData.meta);
     setPositions(positionData.data);
     setOrgUnits(flattenOrgUnits(orgData.tree));
+		setCompanies(companyData.data);
   }
 
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) {
+		if (
+			me &&
+			!me.capabilities?.is_super_admin &&
+			!me.company_roles?.some((role) => role.role_code === "admin")
+		) {
       router.replace("/organization");
     }
   }, [me, router]);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([listUsers({ page }), listAllPositions(), getOrgTree()])
-      .then(([userData, positionData, orgData]) => {
+		Promise.all([listUsers({ page }), listAllPositions(), getOrgTree(), listAllCompanies()])
+			.then(([userData, positionData, orgData, companyData]) => {
         setUsers(userData.data);
         setMeta(userData.meta);
         setPositions(positionData.data);
         setOrgUnits(flattenOrgUnits(orgData.tree));
+				setCompanies(companyData.data);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat pengguna"),
@@ -448,6 +466,33 @@ export default function UsersPage() {
       };
     });
   }
+
+	function toggleCompanyAdmin(company: Company) {
+		setForm((current) => {
+			if (!current) return current;
+			const exists = current.company_roles.some(
+				(assignment) => assignment.company_id === company.id,
+			);
+			return {
+				...current,
+				company_roles: exists
+					? current.company_roles.filter(
+							(assignment) => assignment.company_id !== company.id,
+						)
+					: [
+							...current.company_roles,
+							{
+								company_id: company.id,
+								company_code: company.code,
+								company_name: company.name,
+								role_code: "admin",
+								valid_from: new Date().toISOString().slice(0, 10),
+								valid_to: null,
+							},
+						],
+			};
+		});
+	}
 
   function addPendingPosition() {
     setForm((current) => {
@@ -656,6 +701,10 @@ export default function UsersPage() {
         full_name: user.full_name,
         status: "active",
         roles: user.roles,
+				company_roles: (user.company_roles ?? []).map((assignment) => ({
+					company_id: assignment.company_id,
+					role_code: "admin" as const,
+				})),
         positions: user.positions.map((position) => ({
           position_id: position.position_id,
           assignment_type: position.assignment_type,
@@ -778,30 +827,34 @@ export default function UsersPage() {
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <button
-                type="button"
-                onClick={() =>
-                  downloadImportTemplate().catch(() =>
-                    setError("Gagal mengunduh template"),
-                  )
-                }
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                <DownloadIcon className="h-4 w-4" />
-                Unduh Template
-              </button>
-              <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                <UploadIcon className="h-4 w-4" />
-                {busy ? "Memproses..." : "Import Excel"}
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".xlsx"
-                  onChange={handleImport}
-                  disabled={busy}
-                  className="hidden"
-                />
-              </label>
+              {me?.capabilities?.is_super_admin && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadImportTemplate().catch(() =>
+                        setError("Gagal mengunduh template"),
+                      )
+                    }
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    <DownloadIcon className="h-4 w-4" />
+                    Unduh Template
+                  </button>
+                  <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                    <UploadIcon className="h-4 w-4" />
+                    {busy ? "Memproses..." : "Import Excel"}
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept=".xlsx"
+                      onChange={handleImport}
+                      disabled={busy}
+                      className="hidden"
+                    />
+                  </label>
+                </>
+              )}
               <button
                 type="button"
                 onClick={openCreate}
@@ -1335,7 +1388,9 @@ export default function UsersPage() {
                       Role
                     </legend>
                     <div className="flex flex-wrap gap-2">
-                      {ROLE_OPTIONS.map((role) => {
+											{ROLE_OPTIONS.filter(
+												(role) => role.value !== "super_admin" || me?.capabilities?.is_super_admin,
+											).map((role) => {
                         const checked = form.roles.includes(role.value);
 
                         return (
@@ -1359,6 +1414,40 @@ export default function UsersPage() {
                       })}
                     </div>
                   </fieldset>
+
+									<fieldset className="sm:col-span-2">
+										<legend className="mb-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+											Admin Perusahaan
+										</legend>
+										<p className="mb-2 text-xs text-zinc-500">
+											Pilih perusahaan yang boleh dikelola pengguna ini.
+										</p>
+										<div className="flex flex-wrap gap-2">
+											{companies.map((company) => {
+												const checked = form.company_roles.some(
+													(assignment) => assignment.company_id === company.id,
+												);
+												return (
+													<label
+														key={company.id}
+														className={`inline-flex h-10 cursor-pointer items-center rounded-lg border px-3 text-sm font-semibold transition ${
+															checked
+																? "border-navy-600 bg-navy-50 text-navy-800 dark:border-sky-700 dark:bg-navy-950 dark:text-sky-200"
+																: "border-zinc-300 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
+														}`}
+													>
+														<input
+															type="checkbox"
+															checked={checked}
+															onChange={() => toggleCompanyAdmin(company)}
+															className="sr-only"
+														/>
+														[{company.code}] {company.name}
+													</label>
+												);
+											})}
+										</div>
+									</fieldset>
                 </div>
               </section>
 

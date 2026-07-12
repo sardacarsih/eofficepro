@@ -31,7 +31,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboardIcon, roles: null },
-  { href: "/management/effectiveness", label: "Efektivitas", icon: LayoutDashboardIcon, roles: ["admin", "management_viewer"] },
+	{ href: "/management/effectiveness", label: "Efektivitas", icon: LayoutDashboardIcon, roles: ["super_admin", "management_viewer"] },
   { href: "/inbox", label: "Surat Masuk", icon: InboxIcon, roles: null },
   {
     href: "/audit-export",
@@ -44,7 +44,7 @@ const NAV_ITEMS: NavItem[] = [
     href: "/compose",
     label: "Tulis Surat",
     icon: PenSquareIcon,
-    roles: ["admin", "creator", "secretary"],
+		roles: ["super_admin", "creator", "secretary"],
   },
   {
     href: "/approvals",
@@ -57,8 +57,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/companies", label: "Perusahaan", icon: BuildingIcon, roles: ["admin"] },
   { href: "/positions", label: "Jabatan", icon: BriefcaseIcon, roles: ["admin"] },
   { href: "/users", label: "Pengguna", icon: UsersIcon, roles: ["admin"] },
-  { href: "/audit-assignments", label: "Scope Audit", icon: BriefcaseIcon, roles: ["admin"] },
-  { href: "/letter-types", label: "Jenis Surat", icon: TagIcon, roles: ["admin"] },
+	{ href: "/audit-assignments", label: "Scope Audit", icon: BriefcaseIcon, roles: ["super_admin"] },
+	{ href: "/letter-types", label: "Jenis Surat", icon: TagIcon, roles: ["super_admin"] },
   {
     href: "/approval-matrices",
     label: "Matrix Approval",
@@ -69,13 +69,13 @@ const NAV_ITEMS: NavItem[] = [
     href: "/approval-policies",
     label: "Kebijakan Approval",
     icon: CornerUpRightIcon,
-    roles: ["admin"],
+		roles: ["super_admin"],
   },
   {
     href: "/letter-templates",
     label: "Template",
     icon: LayersIcon,
-    roles: ["admin"],
+		roles: ["admin"],
   },
 ];
 
@@ -95,11 +95,19 @@ export default function Sidebar({
   onLogout,
 }: SidebarProps) {
   const pathname = usePathname();
+  const effectiveRoles = new Set(me?.roles ?? []);
+  if (
+    me?.capabilities?.is_super_admin ||
+    me?.company_roles?.some((role) => role.role_code === "admin")
+  ) {
+    effectiveRoles.add("admin");
+  }
+	if (me?.capabilities?.is_super_admin) effectiveRoles.add("super_admin");
 
   const visibleItems = NAV_ITEMS.filter(
     (item) =>
       (item.isVisible ? item.isVisible(me) : item.roles === null) ||
-      (me?.roles.some((role) => item.roles?.includes(role)) ?? false),
+      Array.from(effectiveRoles).some((role) => item.roles?.includes(role)),
   );
 
   const content = (
