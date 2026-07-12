@@ -5,19 +5,26 @@ import { useParams } from "next/navigation";
 import {
   ApiError,
   createDisposition,
+  createLetterComment,
 	  downloadAuthenticatedFile,
   getLetterDetail,
+  listLetterComments,
   listLetterDispositions,
   listAllPositions,
   type DispositionItem,
   type DispositionRecipient,
   type DispositionStatus,
   type LetterApprovalAction,
+  type LetterComment,
   type LetterDetail,
   type LetterApprovalStep,
+  type PageMeta,
   type Position,
 } from "@/lib/api";
+import Pagination from "@/components/Pagination";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+
+const COMMENT_MAX_LENGTH = 2000;
 
 const STATUS_LABEL: Record<LetterDetail["status"], string> = {
   draft: "Draft",
@@ -145,6 +152,13 @@ export default function LetterDetailPage() {
   );
   const [dispositionError, setDispositionError] = useState<string | null>(null);
   const [dispositionSuccess, setDispositionSuccess] = useState<string | null>(null);
+  const [comments, setComments] = useState<LetterComment[]>([]);
+  const [commentsMeta, setCommentsMeta] = useState<PageMeta | null>(null);
+  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [commentBody, setCommentBody] = useState("");
+  const [postingComment, setPostingComment] = useState(false);
+  const [commentSubmitError, setCommentSubmitError] = useState<string | null>(null);
 
   const myPositions = useMemo(() => me?.positions ?? [], [me]);
   const selectedFromPositionID =
@@ -158,6 +172,25 @@ export default function LetterDetailPage() {
     const data = await listLetterDispositions(params.id, { pageSize: 100 });
     setDispositions(data.data);
   }, [params.id]);
+
+  const loadComments = useCallback(
+    async (page: number) => {
+      setCommentsLoading(true);
+      setCommentsError(null);
+      try {
+        const data = await listLetterComments(params.id, { page });
+        setComments(data.data);
+        setCommentsMeta(data.meta);
+      } catch (err) {
+        setCommentsError(
+          err instanceof Error ? err.message : "Gagal memuat komentar",
+        );
+      } finally {
+        setCommentsLoading(false);
+      }
+    },
+    [params.id],
+  );
 
   useEffect(() => {
     let active = true;
@@ -201,6 +234,7 @@ export default function LetterDetailPage() {
       .then((letterData) => {
         if (!active) return;
         setLetter(letterData.letter);
+        void loadComments(1);
         if (letterData.letter.status === "published") {
           void loadPublishedDispositionData();
         }
@@ -215,7 +249,7 @@ export default function LetterDetailPage() {
     return () => {
       active = false;
     };
-  }, [params.id]);
+  }, [params.id, loadComments]);
 
   const actionsByStepID = useMemo(() => {
     const byStepID = new Map<string, LetterApprovalAction[]>();
@@ -304,6 +338,39 @@ export default function LetterDetailPage() {
       );
     } finally {
       setSavingDisposition(false);
+    }
+  }
+
+  async function handleCreateComment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const body = commentBody.trim();
+    if (!body) {
+      setCommentSubmitError("Komentar wajib diisi.");
+      return;
+    }
+    // Hitung per code point agar konsisten dengan validasi rune di server.
+    if (Array.from(body).length > COMMENT_MAX_LENGTH) {
+      setCommentSubmitError(
+        `Komentar maksimal ${COMMENT_MAX_LENGTH} karakter.`,
+      );
+      return;
+    }
+
+    setPostingComment(true);
+    setCommentSubmitError(null);
+    try {
+      await createLetterComment(params.id, body);
+      setCommentBody("");
+      // Komentar terurut kronologis: komentar baru ada di halaman terakhir.
+      const total = (commentsMeta?.total ?? comments.length) + 1;
+      const pageSize = commentsMeta?.page_size ?? 20;
+      await loadComments(Math.max(1, Math.ceil(total / pageSize)));
+    } catch (err) {
+      setCommentSubmitError(
+        err instanceof Error ? err.message : "Gagal mengirim komentar",
+      );
+    } finally {
+      setPostingComment(false);
     }
   }
 
@@ -822,6 +889,113 @@ export default function LetterDetailPage() {
                   </div>
                 ))}
               </div>
+            </section>
+
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                  Komentar
+                </h2>
+                {commentsMeta && (
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                    {commentsMeta.total}
+                  </span>
+                )}
+              </div>
+
+              {commentsLoading && (
+                <p className="text-sm text-zinc-500">Memuat komentar...</p>
+              )}
+
+              {!commentsLoading && commentsError && (
+                <div
+                  role="alert"
+                  className="mb-3 grid gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+                >
+                  <p>{commentsError}</p>
+                  <button
+                    type="button"
+                    onClick={() => void loadComments(commentsMeta?.page ?? 1)}
+                    className="justify-self-start rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
+                  >
+                    Coba lagi
+                  </button>
+                </div>
+              )}
+
+              {!commentsLoading && !commentsError && (
+                <div className="grid gap-3">
+                  {comments.length === 0 && (
+                    <p className="rounded-lg border border-dashed border-zinc-300 px-3 py-5 text-center text-sm text-zinc-500 dark:border-zinc-700">
+                      Belum ada komentar.
+                    </p>
+                  )}
+                  {comments.map((comment) => (
+                    <div
+                      key={comment.id}
+                      className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                          {comment.user_name}
+                        </p>
+                        <span className="text-xs text-zinc-500">
+                          {formatDate(comment.created_at)}
+                        </span>
+                      </div>
+                      {comment.position_title && (
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {comment.position_title}
+                        </p>
+                      )}
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+                        {comment.body}
+                      </p>
+                    </div>
+                  ))}
+                  <Pagination
+                    page={commentsMeta?.page ?? 1}
+                    totalPages={commentsMeta?.total_pages ?? 1}
+                    onPageChange={(page) => void loadComments(page)}
+                    disabled={commentsLoading || postingComment}
+                  />
+                </div>
+              )}
+
+              <form onSubmit={handleCreateComment} className="mt-4 grid gap-2">
+                {commentSubmitError && (
+                  <p
+                    role="alert"
+                    className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+                  >
+                    {commentSubmitError}
+                  </p>
+                )}
+                <label className="grid gap-1 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Tambah komentar
+                  <textarea
+                    value={commentBody}
+                    onChange={(event) => setCommentBody(event.target.value)}
+                    disabled={postingComment}
+                    rows={3}
+                    maxLength={COMMENT_MAX_LENGTH}
+                    placeholder="Tulis komentar internal"
+                    className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:disabled:bg-zinc-900"
+                  />
+                </label>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-zinc-500">
+                    {Array.from(commentBody).length}/{COMMENT_MAX_LENGTH}
+                  </span>
+                  <button
+                    type="submit"
+                    disabled={postingComment}
+                    className="rounded-lg bg-navy-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-sky-500 dark:text-navy-950 dark:hover:bg-sky-400"
+                  >
+                    {postingComment ? "Mengirim..." : "Kirim Komentar"}
+                  </button>
+                </div>
+              </form>
             </section>
           </aside>
         </>

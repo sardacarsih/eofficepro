@@ -1122,6 +1122,31 @@ export interface LetterDetail {
 export const getLetterDetail = (id: string) =>
   apiFetch<{ letter: LetterDetail }>(`/letters/view/${id}`);
 
+// ---- Komentar internal surat ----
+
+export interface LetterComment {
+  id: string;
+  user_id: string;
+  user_name: string;
+  position_title: string | null;
+  body: string;
+  created_at: string;
+}
+
+export const listLetterComments = (letterID: string, opts: PageParams = {}) =>
+  apiFetch<Paginated<LetterComment>>(
+    `/letters/view/${letterID}/comments${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
+
+export const createLetterComment = (letterID: string, body: string) =>
+  apiFetch<{ comment: LetterComment }>(`/letters/view/${letterID}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
+
 export interface VerifiedLetter {
   id: string;
   company_code: string;

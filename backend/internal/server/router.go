@@ -93,6 +93,8 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 	authed.POST("/approvals/steps/:id/actions", h.ActApprovalStep)
 	authed.GET("/letters/view/:id/dispositions", h.ListLetterDispositions)
 	authed.POST("/letters/view/:id/dispositions", h.CreateDisposition)
+	authed.GET("/letters/view/:id/comments", h.ListLetterComments)
+	authed.POST("/letters/view/:id/comments", h.CreateLetterComment)
 	authed.GET("/dispositions/inbox", h.ListDispositionInbox)
 	authed.PUT("/dispositions/recipients/:id/status", h.UpdateDispositionStatus)
 	authed.GET("/dashboard/summary", h.DashboardSummary)
