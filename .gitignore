@@ -25,7 +25,6 @@ firebase-service-account*.json
 .volumes/
 
 # IDE / OS
-.agents/
 .claude/
 .vscode/
 .idea/
