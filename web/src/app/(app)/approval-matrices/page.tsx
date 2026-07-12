@@ -55,6 +55,10 @@ interface MatrixFormState {
   originator_level: "" | ApprovalMatrixPositionLevel;
   final_level: ApprovalMatrixFinalLevel;
   is_active: boolean;
+  approval_category_id: string;
+  resolution_mode: "fixed" | "user_selected" | "scope_derived";
+  min_final_level: ApprovalMatrixFinalLevel | "";
+  max_final_level: ApprovalMatrixFinalLevel | "";
 }
 
 function emptyForm(letterTypes: LetterType[]): MatrixFormState {
@@ -63,6 +67,10 @@ function emptyForm(letterTypes: LetterType[]): MatrixFormState {
     originator_level: "",
     final_level: "director",
     is_active: true,
+    approval_category_id: "",
+    resolution_mode: "fixed",
+    min_final_level: "",
+    max_final_level: "",
   };
 }
 
@@ -72,6 +80,10 @@ function matrixToForm(matrix: ApprovalMatrix): MatrixFormState {
     originator_level: matrix.originator_level ?? "",
     final_level: matrix.final_level,
     is_active: matrix.is_active,
+    approval_category_id: matrix.approval_category_id ?? "",
+    resolution_mode: matrix.resolution_mode,
+    min_final_level: matrix.min_final_level ?? "",
+    max_final_level: matrix.max_final_level ?? "",
   };
 }
 
@@ -82,6 +94,10 @@ function compactPayload(form: MatrixFormState): ApprovalMatrixPayload {
     final_level: form.final_level,
     flow_mode: "serial",
     is_active: form.is_active,
+    approval_category_id: form.approval_category_id || null,
+    resolution_mode: form.resolution_mode,
+    min_final_level: form.min_final_level || null,
+    max_final_level: form.max_final_level || null,
   };
 }
 
@@ -314,6 +330,7 @@ export default function ApprovalMatricesPage() {
                         </td>
                         <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {levelLabel(matrix.originator_level)}
+                          {matrix.approval_category_name ? ` · ${matrix.approval_category_name}` : ""}
                         </td>
                         <td className="px-4 py-3">
                           <span

@@ -26,6 +26,8 @@ class DraftComposerForm {
     this.sourceBodyEditableHtml = '',
     this.onBehalfOfPositionId,
     this.version = 0,
+    this.approvalCategoryId = '',
+    this.requestedFinalLevel = '',
   });
 
   factory DraftComposerForm.empty({
@@ -75,6 +77,8 @@ class DraftComposerForm {
       sourceBodyEditableHtml: editableHtml,
       recipients: List.unmodifiable(draft.recipients),
       version: draft.version,
+      approvalCategoryId: draft.approvalCategoryId ?? '',
+      requestedFinalLevel: draft.requestedFinalLevel ?? '',
     );
   }
 
@@ -98,6 +102,8 @@ class DraftComposerForm {
   final String sourceBodyEditableHtml;
   final List<DraftRecipient> recipients;
   final int version;
+  final String approvalCategoryId;
+  final String requestedFinalLevel;
 
   bool get isPersistable => validationMessage == null;
   bool get bodyReadOnly => hasUnsupportedLetterFormatting(sourceBodyHtml);
@@ -143,6 +149,10 @@ class DraftComposerForm {
           ? sourceBodyHtml
           : (bodyHtml.isNotEmpty ? bodyHtml : plainTextToLetterHtml(bodyPlain)),
       recipients: recipients,
+      approvalCategoryId:
+          approvalCategoryId.isEmpty ? null : approvalCategoryId,
+      requestedFinalLevel:
+          requestedFinalLevel.isEmpty ? null : requestedFinalLevel,
     );
   }
 
@@ -162,6 +172,8 @@ class DraftComposerForm {
     String? sourceBodyEditableHtml,
     List<DraftRecipient>? recipients,
     int? version,
+    String? approvalCategoryId,
+    String? requestedFinalLevel,
   }) {
     return DraftComposerForm(
       draftId: identical(draftId, _unset) ? this.draftId : draftId as String?,
@@ -182,6 +194,8 @@ class DraftComposerForm {
           sourceBodyEditableHtml ?? this.sourceBodyEditableHtml,
       recipients: recipients ?? this.recipients,
       version: version ?? this.version,
+      approvalCategoryId: approvalCategoryId ?? this.approvalCategoryId,
+      requestedFinalLevel: requestedFinalLevel ?? this.requestedFinalLevel,
     );
   }
 }
@@ -204,6 +218,7 @@ class DraftComposerState {
     this.lastSavedAt,
     this.message,
     this.errorMessage,
+    this.approvalRoute,
   });
 
   final DraftComposerBootstrap bootstrap;
@@ -222,6 +237,7 @@ class DraftComposerState {
   final DateTime? lastSavedAt;
   final String? message;
   final String? errorMessage;
+  final ApprovalRoutePreview? approvalRoute;
 
   bool get busy =>
       saveStatus == DraftComposerSaveStatus.saving ||
@@ -235,8 +251,24 @@ class DraftComposerState {
   String? get validationMessage =>
       form.validationMessage ??
       referenceValidationMessage ??
+      approvalPolicyValidationMessage ??
       onBehalfPolicyMessage(form, bootstrap) ??
       recipientPolicyMessage(form, bootstrap);
+
+  String? get approvalPolicyValidationMessage {
+    for (final type in bootstrap.letterTypes) {
+      if (type.id != form.letterTypeId || type.code != 'PRS') {
+        continue;
+      }
+      if (form.approvalCategoryId.isEmpty) {
+        return 'Kategori persetujuan wajib dipilih.';
+      }
+      if (form.requestedFinalLevel.isEmpty) {
+        return 'Level akhir persetujuan wajib dipilih.';
+      }
+    }
+    return null;
+  }
 
   String? get activeCompanyId => availableCompanies.any(
         (company) => company.id == form.companyId,
@@ -396,6 +428,7 @@ class DraftComposerState {
     Object? lastSavedAt = _unset,
     Object? message = _unset,
     Object? errorMessage = _unset,
+    Object? approvalRoute = _unset,
   }) {
     return DraftComposerState(
       bootstrap: bootstrap ?? this.bootstrap,
@@ -419,6 +452,9 @@ class DraftComposerState {
       errorMessage: identical(errorMessage, _unset)
           ? this.errorMessage
           : errorMessage as String?,
+      approvalRoute: identical(approvalRoute, _unset)
+          ? this.approvalRoute
+          : approvalRoute as ApprovalRoutePreview?,
     );
   }
 }

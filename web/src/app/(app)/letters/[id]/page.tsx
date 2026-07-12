@@ -366,6 +366,14 @@ export default function LetterDetailPage() {
                     {letter.company_name}
                   </p>
                 </div>
+                {(letter.approval_category_name || letter.coordination_scope) && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Kebijakan Approval</p>
+                    <p className="mt-1 text-zinc-900 dark:text-zinc-100">
+                      {letter.approval_category_name ?? letter.coordination_scope?.replaceAll("_", " ")} · {letter.resolved_final_level?.replaceAll("_", " ")}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                     Dibuat

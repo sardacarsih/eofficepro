@@ -19,11 +19,13 @@ import (
 )
 
 type draftSubmitSnapshot struct {
-	ID                string
-	LetterTypeID      string
-	CreatorPositionID string
-	Status            string
-	BodyPlain         string
+	ID                  string
+	LetterTypeID        string
+	CreatorPositionID   string
+	ApprovalCategoryID  *string
+	RequestedFinalLevel *string
+	Status              string
+	BodyPlain           string
 }
 
 type approvalRoute struct {
@@ -59,6 +61,7 @@ func lockDraftForSubmit(ctx context.Context, tx pgx.Tx, letterID string, userID 
 	var draft draftSubmitSnapshot
 	err := tx.QueryRow(ctx, `
 		SELECT l.id::text, l.letter_type_id::text, l.creator_position_id::text,
+		       l.approval_category_id::text, l.requested_final_level,
 		       l.status, COALESCE(v.body_plain, '')
 		FROM letters l
 		LEFT JOIN LATERAL (
@@ -73,6 +76,8 @@ func lockDraftForSubmit(ctx context.Context, tx pgx.Tx, letterID string, userID 
 		&draft.ID,
 		&draft.LetterTypeID,
 		&draft.CreatorPositionID,
+		&draft.ApprovalCategoryID,
+		&draft.RequestedFinalLevel,
 		&draft.Status,
 		&draft.BodyPlain,
 	)
@@ -458,7 +463,7 @@ func validateApprovalRouteHasActiveHolders(ctx context.Context, tx pgx.Tx, route
 	return nil
 }
 
-func loadApprovalPosition(ctx context.Context, tx pgx.Tx, positionID string) (approvalPosition, error) {
+func loadApprovalPosition(ctx context.Context, tx policyQueryer, positionID string) (approvalPosition, error) {
 	var position approvalPosition
 	err := tx.QueryRow(ctx, `
 		SELECT id::text, title, position_type, reports_to::text

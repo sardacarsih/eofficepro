@@ -13,32 +13,37 @@ import (
 )
 
 type LetterDetail struct {
-	ID                   string                 `json:"id"`
-	CompanyCode          string                 `json:"company_code"`
-	CompanyName          string                 `json:"company_name"`
-	LetterTypeCode       string                 `json:"letter_type_code"`
-	LetterTypeName       string                 `json:"letter_type_name"`
-	LetterNumber         *string                `json:"letter_number"`
-	Subject              string                 `json:"subject"`
-	Classification       string                 `json:"classification"`
-	Priority             string                 `json:"priority"`
-	Status               string                 `json:"status"`
-	CreatorName          string                 `json:"creator_name"`
-	CreatorPositionTitle string                 `json:"creator_position_title"`
-	OnBehalfOfTitle      *string                `json:"on_behalf_of_title"`
-	Version              int                    `json:"version"`
-	BodyHTML             string                 `json:"body_html"`
-	BodyPlain            string                 `json:"body_plain"`
-	QRToken              *string                `json:"qr_token"`
-	VerifyURL            *string                `json:"verify_url"`
-	FinalPDFURL          *string                `json:"final_pdf_url"`
-	Recipients           []DraftRecipient       `json:"recipients"`
-	Attachments          []LetterAttachment     `json:"attachments"`
-	ApprovalSteps        []LetterApprovalStep   `json:"approval_steps"`
-	ApprovalActions      []LetterApprovalAction `json:"approval_actions"`
-	CreatedAt            time.Time              `json:"created_at"`
-	UpdatedAt            time.Time              `json:"updated_at"`
-	PublishedAt          *time.Time             `json:"published_at"`
+	ID                     string                 `json:"id"`
+	CompanyCode            string                 `json:"company_code"`
+	CompanyName            string                 `json:"company_name"`
+	LetterTypeCode         string                 `json:"letter_type_code"`
+	LetterTypeName         string                 `json:"letter_type_name"`
+	LetterNumber           *string                `json:"letter_number"`
+	Subject                string                 `json:"subject"`
+	Classification         string                 `json:"classification"`
+	Priority               string                 `json:"priority"`
+	Status                 string                 `json:"status"`
+	CreatorName            string                 `json:"creator_name"`
+	CreatorPositionTitle   string                 `json:"creator_position_title"`
+	OnBehalfOfTitle        *string                `json:"on_behalf_of_title"`
+	ApprovalCategoryName   *string                `json:"approval_category_name"`
+	RequestedFinalLevel    *string                `json:"requested_final_level"`
+	ResolvedFinalLevel     *string                `json:"resolved_final_level"`
+	CoordinationScope      *string                `json:"coordination_scope"`
+	ApprovalResolutionMode *string                `json:"approval_resolution_mode"`
+	Version                int                    `json:"version"`
+	BodyHTML               string                 `json:"body_html"`
+	BodyPlain              string                 `json:"body_plain"`
+	QRToken                *string                `json:"qr_token"`
+	VerifyURL              *string                `json:"verify_url"`
+	FinalPDFURL            *string                `json:"final_pdf_url"`
+	Recipients             []DraftRecipient       `json:"recipients"`
+	Attachments            []LetterAttachment     `json:"attachments"`
+	ApprovalSteps          []LetterApprovalStep   `json:"approval_steps"`
+	ApprovalActions        []LetterApprovalAction `json:"approval_actions"`
+	CreatedAt              time.Time              `json:"created_at"`
+	UpdatedAt              time.Time              `json:"updated_at"`
+	PublishedAt            *time.Time             `json:"published_at"`
 }
 
 type LetterApprovalStep struct {
@@ -89,7 +94,8 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 	err = h.DB.QueryRow(ctx, `
 		SELECT l.id::text, co.code, co.name, lt.code, lt.name, l.letter_number,
 		       l.subject, l.classification, l.priority, l.status,
-		       u.full_name, p.title, obp.title,
+		       u.full_name, p.title, obp.title, ac.name, l.requested_final_level,
+		       l.resolved_final_level, l.coordination_scope, l.approval_resolution_mode,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''), COALESCE(v.body_plain, ''),
 		       l.qr_token, l.final_pdf_key, l.created_at, l.updated_at, l.published_at
 		FROM letters l
@@ -98,6 +104,7 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
 		LEFT JOIN positions obp ON obp.id = l.on_behalf_of_position_id
+		LEFT JOIN approval_categories ac ON ac.id = l.approval_category_id
 		LEFT JOIN LATERAL (
 			SELECT version, body_html, body_plain
 			FROM letter_versions
@@ -119,6 +126,11 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		&detail.CreatorName,
 		&detail.CreatorPositionTitle,
 		&detail.OnBehalfOfTitle,
+		&detail.ApprovalCategoryName,
+		&detail.RequestedFinalLevel,
+		&detail.ResolvedFinalLevel,
+		&detail.CoordinationScope,
+		&detail.ApprovalResolutionMode,
 		&detail.Version,
 		&detail.BodyHTML,
 		&detail.BodyPlain,

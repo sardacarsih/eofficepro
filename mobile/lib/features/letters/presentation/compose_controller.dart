@@ -97,6 +97,7 @@ class DraftComposerController
           : DraftComposerSaveStatus.idle,
       message: null,
       errorMessage: null,
+      approvalRoute: null,
     );
     state = AsyncData(next);
     _scheduleAutosave(next);
@@ -108,6 +109,32 @@ class DraftComposerController
     final current = _current;
     if (current == null) return;
     updateForm(update(current.form));
+  }
+
+  Future<void> previewApprovalRoute() async {
+    final current = _current;
+    if (current == null) return;
+    final validation = current.validationMessage;
+    if (validation != null) {
+      state = AsyncData(current.copyWith(errorMessage: validation));
+      return;
+    }
+    try {
+      final preview = await ref
+          .read(draftRepositoryProvider)
+          .previewApprovalRoute(payload: current.form.toPayload());
+      if (_current == null) return;
+      var form = _current!.form;
+      if (form.requestedFinalLevel.isEmpty && preview.finalLevel.isNotEmpty) {
+        form = form.copyWith(requestedFinalLevel: preview.finalLevel);
+      }
+      state = AsyncData(_current!
+          .copyWith(form: form, approvalRoute: preview, errorMessage: null));
+    } catch (error) {
+      if (_current == null) return;
+      state = AsyncData(_current!
+          .copyWith(approvalRoute: null, errorMessage: _messageFor(error)));
+    }
   }
 
   void selectCompany(String companyId) {

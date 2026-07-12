@@ -371,11 +371,13 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		return
 	}
 
-	route, err := h.resolveApprovalRoute(ctx, tx, draft.LetterTypeID, draft.CreatorPositionID)
+	policyPreview, err := h.resolvePolicyRoute(ctx, tx, draft.LetterTypeID, draft.CreatorPositionID,
+		draft.ApprovalCategoryID, draft.RequestedFinalLevel, recipients)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	route := approvalRoute{SLAHours: 24, Steps: policyPreview.Steps}
 	if err := validateApprovalRouteHasActiveHolders(ctx, tx, route); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -406,8 +408,12 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		    current_step_order = 1,
 		    route_snapshot = $2,
 		    qr_token = $3,
+		    resolved_final_level = $4,
+		    coordination_scope = NULLIF($5, ''),
+		    approval_resolution_mode = $6,
 		    updated_at = now()
-		WHERE id = $1`, letterID, routeJSON, qrToken); err != nil {
+		WHERE id = $1`, letterID, routeJSON, qrToken, policyPreview.FinalLevel,
+		policyPreview.Scope, policyPreview.ResolutionMode); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengajukan surat"})
 		return
 	}

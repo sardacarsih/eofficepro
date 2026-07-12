@@ -561,6 +561,11 @@ export interface ApprovalMatrix {
   letter_type_code: string;
   letter_type_name: string;
   originator_level: ApprovalMatrixPositionLevel | null;
+  approval_category_id: string | null;
+  approval_category_name: string | null;
+  resolution_mode: "fixed" | "user_selected" | "scope_derived";
+  min_final_level: ApprovalMatrixFinalLevel | null;
+  max_final_level: ApprovalMatrixFinalLevel | null;
   final_level: ApprovalMatrixFinalLevel;
   flow_mode: "serial";
   is_active: boolean;
@@ -571,6 +576,10 @@ export interface ApprovalMatrix {
 export interface ApprovalMatrixPayload {
   letter_type_id: string;
   originator_level?: ApprovalMatrixPositionLevel | null;
+  approval_category_id?: string | null;
+  resolution_mode?: "fixed" | "user_selected" | "scope_derived";
+  min_final_level?: ApprovalMatrixFinalLevel | null;
+  max_final_level?: ApprovalMatrixFinalLevel | null;
   final_level: ApprovalMatrixFinalLevel;
   flow_mode?: "serial";
   is_active?: boolean;
@@ -630,6 +639,11 @@ export interface DraftLetter {
   on_behalf_of_position_id: string | null;
   on_behalf_of_title: string | null;
   template_id: string | null;
+  approval_category_id: string | null;
+  requested_final_level: ApprovalMatrixFinalLevel | null;
+  resolved_final_level: ApprovalMatrixFinalLevel | null;
+  coordination_scope: string | null;
+  approval_resolution_mode: "user_selected" | "scope_derived" | "fixed" | null;
   version: number;
   body_html: string;
   body_plain: string;
@@ -652,6 +666,8 @@ export interface DraftLetterPayload {
   on_behalf_of_position_id?: string | null;
   template_id?: string | null;
   base_version?: number;
+  approval_category_id?: string | null;
+  requested_final_level?: ApprovalMatrixFinalLevel | null;
   subject: string;
   classification?: LetterType["default_classification"];
   priority: DraftLetter["priority"];
@@ -764,6 +780,35 @@ export async function downloadAuthenticatedFile(path: string, fallbackName: stri
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+export interface ApprovalCategory {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface ApprovalRoutePreview {
+  resolution_mode: "user_selected" | "scope_derived" | "fixed";
+  final_level: ApprovalMatrixFinalLevel;
+  coordination_scope?: string;
+  allowed_levels: ApprovalMatrixFinalLevel[];
+  steps: SubmitDraftResult["approval_steps"];
+}
+
+export const listApprovalCategories = () =>
+  apiFetch<{ data: ApprovalCategory[] }>("/approval-categories");
+
+export const previewApprovalRoute = (payload: {
+  letter_type_id: string;
+  creator_position_id: string;
+  approval_category_id?: string | null;
+  requested_final_level?: ApprovalMatrixFinalLevel | null;
+  recipients: Omit<DraftRecipient, "label">[];
+}) => apiFetch<ApprovalRoutePreview>("/approval-routes/preview", {
+  method: "POST",
+  body: JSON.stringify(payload),
+});
 
 // ---- Inbox surat masuk ----
 
@@ -984,6 +1029,11 @@ export interface LetterDetail {
   creator_name: string;
   creator_position_title: string;
   on_behalf_of_title: string | null;
+  approval_category_name: string | null;
+  requested_final_level: string | null;
+  resolved_final_level: string | null;
+  coordination_scope: string | null;
+  approval_resolution_mode: string | null;
   version: number;
   body_html: string;
   body_plain: string;

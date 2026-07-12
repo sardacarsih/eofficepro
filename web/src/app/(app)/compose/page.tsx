@@ -17,6 +17,8 @@ import {
   listAllLetterTypes,
   listMyLetters,
   listAllPositions,
+  listApprovalCategories,
+  previewApprovalRoute,
   previewDraftLetter,
   submitDraftLetter,
   updateDraftLetter,
@@ -31,6 +33,9 @@ import {
   type OrgUnit,
   type Position,
   type User,
+  type ApprovalCategory,
+  type ApprovalRoutePreview,
+  type ApprovalMatrixFinalLevel,
 } from "@/lib/api";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 
@@ -48,6 +53,8 @@ interface ComposerForm {
   priority: DraftLetterPayload["priority"];
   body_html: string;
   recipients: DraftRecipient[];
+  approval_category_id: string;
+  requested_final_level: ApprovalMatrixFinalLevel | "";
   version: number;
 }
 
@@ -77,6 +84,8 @@ function emptyForm(
     priority: "normal",
     body_html: "",
     recipients: [],
+    approval_category_id: "",
+    requested_final_level: "",
     version: 0,
   };
 }
@@ -96,6 +105,8 @@ function draftToForm(draft: DraftLetter, positions: Position[] = []): ComposerFo
     priority: draft.priority,
     body_html: draft.body_html,
     recipients: draft.recipients,
+    approval_category_id: draft.approval_category_id ?? "",
+    requested_final_level: draft.requested_final_level ?? "",
     version: draft.version,
   };
 }
@@ -143,6 +154,8 @@ function compactPayload(form: ComposerForm): DraftLetterPayload {
       target_type: recipient.target_type,
       target_id: recipient.target_id,
     })),
+    approval_category_id: form.approval_category_id || null,
+    requested_final_level: form.requested_final_level || null,
   };
 }
 
@@ -250,6 +263,9 @@ export default function ComposePage() {
   const me = useCurrentUser();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
+  const [approvalCategories, setApprovalCategories] = useState<ApprovalCategory[]>([]);
+  const [routePreview, setRoutePreview] = useState<ApprovalRoutePreview | null>(null);
+  const [routePreviewError, setRoutePreviewError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<LetterTemplate[]>([]);
   const [recipientPositions, setRecipientPositions] = useState<Position[]>([]);
   const [recipientOrgUnits, setRecipientOrgUnits] = useState<OrgUnit[]>([]);
@@ -298,6 +314,7 @@ export default function ComposePage() {
       listAllLetterTemplates(false),
       listDraftLetters(),
       listMyLetters({ pageSize: 50 }),
+      listApprovalCategories(),
     ])
       .then(
         ([
@@ -308,6 +325,7 @@ export default function ComposePage() {
           templateData,
           draftData,
           myLetterData,
+          categoryData,
         ]) => {
         setCompanies(companyData.data);
         setRecipientPositions(positionData.data);
@@ -316,6 +334,7 @@ export default function ComposePage() {
         setTemplates(templateData.data);
         setDrafts(draftData.letters);
         setMyLetters(myLetterData.data);
+        setApprovalCategories(categoryData.data);
         setForm(
           emptyForm(
             companyData.data,
@@ -332,6 +351,36 @@ export default function ComposePage() {
       )
       .finally(() => setLoading(false));
   }, [me]);
+
+  const selectedLetterType = letterTypes.find((item) => item.id === form?.letter_type_id);
+
+  useEffect(() => {
+    if (!form || !form.letter_type_id || !form.creator_position_id) return;
+    if (selectedLetterType?.code === "PRS" && !form.approval_category_id) {
+      setRoutePreview(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void previewApprovalRoute({
+        letter_type_id: form.letter_type_id,
+        creator_position_id: form.creator_position_id,
+        approval_category_id: form.approval_category_id || null,
+        requested_final_level: form.requested_final_level || null,
+        recipients: form.recipients.map(({ type, target_type, target_id }) => ({ type, target_type, target_id })),
+      }).then((preview) => {
+        setRoutePreview(preview);
+        setRoutePreviewError(null);
+        if (preview.resolution_mode === "user_selected" && !form.requested_final_level) {
+          setForm((current) => current ? { ...current, requested_final_level: preview.final_level } : current);
+        }
+      }).catch((err: unknown) => {
+        setRoutePreview(null);
+        setRoutePreviewError(err instanceof Error ? err.message : "Rute approval tidak tersedia");
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [form?.letter_type_id, form?.creator_position_id, form?.approval_category_id,
+    form?.requested_final_level, form?.recipients, selectedLetterType?.code]);
 
   const matchingTemplates = useMemo(() => {
     if (!form) return [];
@@ -448,6 +497,8 @@ export default function ComposePage() {
       letter_type_id: letterTypeID,
       template_id: "",
       classification: letterType?.default_classification ?? "biasa",
+      approval_category_id: "",
+      requested_final_level: "",
     });
   }
 
@@ -872,6 +923,35 @@ export default function ComposePage() {
                       ))}
                     </select>
                   </label>
+                  {selectedLetterType?.code === "PRS" && (
+                    <>
+                      <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                        Kategori Persetujuan
+                        <select value={form.approval_category_id} onChange={(e) => updateForm({ approval_category_id: e.target.value, requested_final_level: "" })}
+                          className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal dark:border-zinc-700 dark:bg-zinc-950">
+                          <option value="">Pilih kategori</option>
+                          {approvalCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                        Level Akhir
+                        <select value={form.requested_final_level} onChange={(e) => updateForm({ requested_final_level: e.target.value as ApprovalMatrixFinalLevel })}
+                          disabled={!routePreview?.allowed_levels.length}
+                          className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950">
+                          <option value="">Pilih level</option>
+                          {routePreview?.allowed_levels.map((level) => <option key={level} value={level}>{level.replaceAll("_", " ")}</option>)}
+                        </select>
+                      </label>
+                    </>
+                  )}
+                  {routePreview && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm dark:border-emerald-900 dark:bg-emerald-950/40 md:col-span-2">
+                      <p className="font-semibold">Rute approval · {routePreview.final_level.replaceAll("_", " ")}</p>
+                      {routePreview.coordination_scope && <p className="text-xs">Cakupan: {routePreview.coordination_scope.replaceAll("_", " ")}</p>}
+                      <p className="mt-1 text-xs">{routePreview.steps.map((step) => step.title).join(" → ")}</p>
+                    </div>
+                  )}
+                  {routePreviewError && <p className="text-sm text-red-600 md:col-span-2">{routePreviewError}</p>}
                   <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
                     Jenis Surat
                     <select
