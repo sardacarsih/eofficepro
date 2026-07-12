@@ -35,6 +35,7 @@ backend.
 
 ## Handoff
 
+Tulis pada bagian `## Handoff — Mobile` di file task (`docs/tasks/`).
 Laporkan screen/provider/repository/model yang berubah, perilaku retry dan
 session, hasil analyze/test, perangkat/layout yang diverifikasi, serta dependency
 backend yang belum tersedia.

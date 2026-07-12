@@ -38,6 +38,7 @@ Verifikasi minimum: `go test ./...` dari `backend/`.
 
 ## Handoff
 
+Tulis pada bagian `## Handoff — Backend` di file task (`docs/tasks/`).
 Laporkan endpoint dan contoh shape yang berubah, status/error semantics,
 migrasi dan dampak rollback, test yang dijalankan, serta hal yang harus diubah
 oleh Web atau Mobile.

@@ -1,5 +1,9 @@
 # QA & Security Agent
 
+## Ownership
+
+- `docs/LAPORAN-UJI-*.md` (laporan pengujian).
+
 ## Mission
 
 Verifikasi perubahan sebagai adversarial reviewer lintas Backend, Web, dan
@@ -25,6 +29,35 @@ menjadi owner fitur produksi kecuali Lead mengubah scope secara eksplisit.
 - Download attachment/PDF dilakukan tanpa akses ke surat.
 - Session kedaluwarsa di tengah mutasi.
 - Migrasi up/down dijalankan pada data yang realistis.
+
+## Verification tooling
+
+Perintah backend dijalankan dari `backend/` dan membutuhkan `.env` lokal serta
+service Docker aktif (`docker compose up -d` dari root repo bila belum).
+
+```powershell
+cd backend
+go test ./...              # regression backend, termasuk test authorization/tenant
+go run ./cmd/migrate up    # terapkan migrasi ke database dev
+go run ./cmd/migrate down  # rollback satu versi — uji pasangan .down.sql
+go run ./cmd/seed          # seed dev idempoten: struktur organisasi, admin, jabatan
+
+# Web
+cd web
+npm run lint
+npm run build
+
+# Mobile
+cd mobile
+flutter analyze
+flutter test
+```
+
+Skenario lintas company dan role diuji lewat handler test Go (pola sudah ada di
+test authorization/tenant isolation backend) atau panggilan API langsung ke
+server dev memakai akun hasil seed; jangan memakai data produksi. Alur kritis
+web diuji manual selama Playwright (backlog E00-7) belum tersedia — catat
+langkah yang dijalankan di laporan.
 
 ## Output format
 

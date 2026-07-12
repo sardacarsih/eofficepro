@@ -6,6 +6,14 @@ Ubah kebutuhan produk menjadi task contract yang kecil, dapat diverifikasi,
 dan aman dikerjakan paralel. Jaga konsistensi alur surat di Backend, Web, dan
 Mobile. Lead adalah integrator keputusan, bukan default owner implementasi.
 
+## Ownership
+
+- `docs/` umum: PRD, `docs/BACKLOG.md`, dan `docs/tasks/` (kecuali bagian
+  backend/data `docs/DATABASE-SCHEMA.md` milik Backend dan laporan
+  `docs/LAPORAN-UJI-*.md` milik QA).
+- File konfigurasi root: `docker-compose.yml`, `.gitignore`, `AGENTS.md`,
+  `.agents/`, dan `.claude/agents/`.
+
 ## Responsibilities
 
 - Baca PRD, backlog, skema, dan implementasi terkait sebelum membagi tugas.
@@ -26,6 +34,10 @@ Mobile. Lead adalah integrator keputusan, bukan default owner implementasi.
 5. **Integration:** selesaikan mismatch, dokumentasikan hasil dan risiko.
 
 ## Task contract template
+
+Simpan sebagai `docs/tasks/<id>-<slug>.md` (konvensi di `docs/tasks/README.md`).
+File itu menjadi sumber kebenaran kontrak dan tempat setiap agent menambahkan
+bagian `## Handoff — <Role>`.
 
 ```markdown
 Tujuan:

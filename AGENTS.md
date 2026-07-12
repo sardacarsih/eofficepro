@@ -24,7 +24,20 @@ menentukan perilaku yang diinginkan.
 - `mobile/`: Flutter Android untuk pembuat, approver, dan penerima surat.
 - `docs/`: spesifikasi produk, skema, backlog, dan laporan pengujian.
 
+Owner default per area:
+
+- Backend agent: `backend/` dan bagian backend/data `docs/DATABASE-SCHEMA.md`.
+- Web agent: `web/src/` dan `web/scripts/`.
+- Mobile agent: `mobile/lib/` dan `mobile/test/`.
+- QA agent: laporan pengujian `docs/LAPORAN-UJI-*.md`.
+- Lead: area yang tidak disebut di atas — `docs/` umum (PRD, backlog,
+  `docs/tasks/`), file konfigurasi root (`docker-compose.yml`, `.gitignore`),
+  serta `AGENTS.md`, `.agents/`, dan `.claude/agents/`.
+
 Satu file hanya boleh memiliki satu owner agent dalam satu gelombang kerja.
+File hub yang disentuh banyak task (contoh: `web/src/lib/api.ts`,
+`backend/internal/server/router.go`) hanya boleh diubah oleh satu task per
+gelombang; Lead mengurutkan task lain yang membutuhkan file yang sama.
 Jangan mengubah file di luar scope task kecuali perubahan itu diperlukan untuk
 menjaga build atau kontrak lintas aplikasi; sebutkan perluasan scope tersebut
 dalam handoff.
@@ -45,8 +58,15 @@ dalam handoff.
 
 ## Team workflow
 
-Gunakan role di `.agents/` ketika pekerjaan perlu dibagi. Lead menetapkan task
-contract terlebih dahulu. Minimal task contract berisi:
+Role tim didefinisikan di `.agents/`: `lead.md`, `backend.md`, `web.md`,
+`mobile.md`, dan `qa-security.md`. Sesi utama berperan sebagai Lead; specialist
+dijalankan sebagai subagent Claude Code yang terdaftar di `.claude/agents/`
+dengan nama `backend`, `web`, `mobile`, dan `qa-security`.
+
+Lead menulis task contract sebagai file `docs/tasks/<id>-<slug>.md` (konvensi
+di `docs/tasks/README.md`) sebelum pekerjaan dibagi. File task adalah satu-
+satunya sumber kebenaran kontrak untuk task itu — termasuk kontrak API yang
+dipakai Web dan Mobile untuk bekerja paralel. Minimal task contract berisi:
 
 1. tujuan dan perilaku pengguna;
 2. scope file/folder dan hal yang di luar scope;
@@ -56,9 +76,11 @@ contract terlebih dahulu. Minimal task contract berisi:
 
 Backend menjadi owner kontrak API. Web dan Mobile boleh mulai paralel setelah
 request, response, error semantics, dan authorization stabil. Jika kontrak
-harus berubah, Backend memberi tahu Lead sebelum consumer diperbarui.
+harus berubah, Backend memberi tahu Lead dan memperbarui bagian kontrak pada
+file task sebelum consumer diperbarui.
 
-Handoff setiap agent harus menyebutkan:
+Handoff setiap agent ditulis sebagai bagian `## Handoff — <Role>` pada file
+task yang sama dan harus menyebutkan:
 
 - ringkasan perilaku yang selesai;
 - file yang diubah;

@@ -29,10 +29,12 @@ responsif, dan accessible untuk admin, sekretaris, serta pengguna surat.
 
 - `npm run lint`
 - `npm run build`
-- smoke test atau Playwright untuk alur kritis yang diubah jika tersedia.
+- Playwright belum tersedia (backlog E00-7); uji manual alur kritis yang
+  diubah dan sebutkan langkahnya dalam handoff.
 
 ## Handoff
 
+Tulis pada bagian `## Handoff — Web` di file task (`docs/tasks/`).
 Laporkan route/component/API method yang berubah, state UI yang ditangani,
 hasil lint/build/test, screenshot bila perubahan visual material, dan mismatch
 kontrak yang ditemukan.

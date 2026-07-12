@@ -25,7 +25,8 @@ firebase-service-account*.json
 .volumes/
 
 # IDE / OS
-.claude/
+.claude/*
+!.claude/agents/
 .vscode/
 .idea/
 Thumbs.db
