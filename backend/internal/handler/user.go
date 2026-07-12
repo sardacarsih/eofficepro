@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -112,7 +113,6 @@ func (h *Handler) ListUsers(c *gin.Context) {
 			JOIN roles r ON r.id = ucr.role_id
 			WHERE ucr.user_id = u.id
 			  AND ($1 OR company.id::text = ANY($2::text[]))
-			  AND current_date >= ucr.valid_from
 			  AND (ucr.valid_to IS NULL OR current_date < ucr.valid_to)
 		) company_roles ON true
 		WHERE `+userScopeSQL+`
@@ -179,8 +179,10 @@ type userPositionPayload struct {
 }
 
 type userCompanyRolePayload struct {
-	CompanyID string `json:"company_id"`
-	RoleCode  string `json:"role_code"`
+	CompanyID string  `json:"company_id"`
+	RoleCode  string  `json:"role_code"`
+	ValidFrom string  `json:"valid_from"`
+	ValidTo   *string `json:"valid_to"`
 }
 
 type createUserRequest struct {
@@ -624,6 +626,25 @@ func normalizeUserCompanyRoles(input []userCompanyRolePayload) ([]userCompanyRol
 		if assignment.RoleCode != "admin" {
 			return nil, errors.New("role perusahaan tidak dikenal: " + assignment.RoleCode)
 		}
+		if assignment.ValidFrom == "" {
+			assignment.ValidFrom = time.Now().Format(time.DateOnly)
+		}
+		validFrom, err := time.Parse(time.DateOnly, assignment.ValidFrom)
+		if err != nil {
+			return nil, errors.New("tanggal mulai assignment perusahaan tidak valid")
+		}
+		if assignment.ValidTo != nil {
+			trimmed := strings.TrimSpace(*assignment.ValidTo)
+			if trimmed == "" {
+				assignment.ValidTo = nil
+			} else {
+				validTo, err := time.Parse(time.DateOnly, trimmed)
+				if err != nil || !validTo.After(validFrom) {
+					return nil, errors.New("tanggal akhir assignment perusahaan harus setelah tanggal mulai")
+				}
+				assignment.ValidTo = &trimmed
+			}
+		}
 		key := assignment.CompanyID + ":" + assignment.RoleCode
 		if seen[key] {
 			return nil, errors.New("assignment role perusahaan tidak boleh duplikat")
@@ -705,13 +726,13 @@ func syncUserCompanyRoles(ctx context.Context, tx pgx.Tx, userID string, actorID
 	}
 	for _, assignment := range assignments {
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO user_company_roles (user_id, company_id, role_id, created_by)
-			SELECT $1, c.id, r.id, $4
-			FROM companies c CROSS JOIN roles r
-			WHERE c.id = $2 AND c.is_active AND r.code = $3
-			ON CONFLICT (user_id, company_id, role_id, valid_from)
-			DO UPDATE SET valid_to = NULL, created_by = EXCLUDED.created_by`,
-			userID, assignment.CompanyID, assignment.RoleCode, actorID)
+		INSERT INTO user_company_roles (user_id, company_id, role_id, valid_from, valid_to, created_by)
+		SELECT $1, c.id, r.id, $4::date, $5::date, $6
+		FROM companies c CROSS JOIN roles r
+		WHERE c.id = $2 AND c.is_active AND r.code = $3
+		ON CONFLICT (user_id, company_id, role_id, valid_from)
+		DO UPDATE SET valid_to = EXCLUDED.valid_to, created_by = EXCLUDED.created_by`,
+			userID, assignment.CompanyID, assignment.RoleCode, assignment.ValidFrom, assignment.ValidTo, actorID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return errors.New("perusahaan atau role assignment tidak valid")
 		}

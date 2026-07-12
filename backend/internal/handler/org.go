@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -79,12 +80,28 @@ type orgUnitRequest struct {
 	Region    *string `json:"region" binding:"omitempty,oneof=HO REG1 REG2 REPO_JKT REPO_PKB"`
 }
 
+func normalizeOrgUnitRequest(req *orgUnitRequest) {
+	req.CompanyID = strings.TrimSpace(req.CompanyID)
+	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
+	req.Name = strings.TrimSpace(req.Name)
+	req.UnitLevel = strings.ToLower(strings.TrimSpace(req.UnitLevel))
+	if req.ParentID != nil {
+		trimmed := strings.TrimSpace(*req.ParentID)
+		if trimmed == "" {
+			req.ParentID = nil
+		} else {
+			req.ParentID = &trimmed
+		}
+	}
+}
+
 func (h *Handler) CreateOrgUnit(c *gin.Context) {
 	var req orgUnitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "data unit tidak lengkap: " + err.Error()})
 		return
 	}
+	normalizeOrgUnitRequest(&req)
 	ctx := c.Request.Context()
 	if req.CompanyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "perusahaan wajib dipilih"})
@@ -127,6 +144,7 @@ func (h *Handler) UpdateOrgUnit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "data unit tidak lengkap: " + err.Error()})
 		return
 	}
+	normalizeOrgUnitRequest(&req)
 	ctx := c.Request.Context()
 	if req.CompanyID != "" && req.CompanyID != companyID {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "perusahaan unit tidak dapat dipindahkan"})
@@ -134,7 +152,19 @@ func (h *Handler) UpdateOrgUnit(c *gin.Context) {
 	}
 	if req.ParentID != nil {
 		var validParent bool
-		if err := h.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM org_units WHERE id = $1 AND company_id = $2 AND id <> $3 AND is_active)`, *req.ParentID, companyID, id).Scan(&validParent); err != nil || !validParent {
+		if err := h.DB.QueryRow(ctx, `
+			WITH RECURSIVE descendants AS (
+				SELECT id FROM org_units WHERE parent_id = $3 AND is_active
+				UNION ALL
+				SELECT child.id FROM org_units child
+				JOIN descendants parent ON child.parent_id = parent.id
+				WHERE child.is_active
+			)
+			SELECT EXISTS (
+				SELECT 1 FROM org_units
+				WHERE id = $1 AND company_id = $2 AND id <> $3 AND is_active
+				  AND id NOT IN (SELECT id FROM descendants)
+			)`, *req.ParentID, companyID, id).Scan(&validParent); err != nil || !validParent {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "parent unit harus berasal dari perusahaan yang sama"})
 			return
 		}

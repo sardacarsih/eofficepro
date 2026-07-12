@@ -4,15 +4,25 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BuildingIcon,
   ChevronDownIcon,
+  EditIcon,
+  PlusIcon,
   SearchIcon,
 } from "@/components/layout/icons";
 import {
+  createOrgUnit,
+  deactivateOrgUnit,
   getOrgTree,
+  listAllCompanies,
   listAllPositions,
+  updateOrgUnit,
+  type Company,
   type OrgUnit,
+  type OrgUnitPayload,
   type Position,
 } from "@/lib/api";
 import { POSITION_TYPE_LABEL } from "@/lib/position-types";
+import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+import OrganizationUnitDialog from "./_components/OrganizationUnitDialog";
 
 const LEVEL_LABEL: Record<string, string> = {
   directorate: "Direktorat",
@@ -178,6 +188,19 @@ function countVisible(units: OrgUnit[]): number {
     (sum, unit) => sum + 1 + countVisible(unit.children ?? []),
     0,
   );
+}
+
+function flattenUnits(units: OrgUnit[]): OrgUnit[] {
+  return units.flatMap((unit) => [unit, ...flattenUnits(unit.children ?? [])]);
+}
+
+async function loadOrganizationData() {
+  const [org, positionData, companyData] = await Promise.all([
+    getOrgTree(),
+    listAllPositions(),
+    listAllCompanies(),
+  ]);
+  return { org, positionData, companyData };
 }
 
 function countDescendants(unit: OrgUnit): number {
@@ -481,8 +504,10 @@ function DetailPanel({ unit, parent, positions }: DetailPanelProps) {
 }
 
 export default function OrganizationPage() {
+  const me = useCurrentUser();
   const [tree, setTree] = useState<OrgUnit[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -491,6 +516,10 @@ export default function OrganizationPage() {
   const [regionFilter, setRegionFilter] = useState<RegionFilter>("all");
   const [expandedIDs, setExpandedIDs] = useState<Set<string>>(new Set());
   const [selectedID, setSelectedID] = useState<string | null>(null);
+  const [formUnit, setFormUnit] = useState<OrgUnit | null | undefined>(undefined);
+  const [suggestedParent, setSuggestedParent] = useState<OrgUnit | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const indexes = useMemo(() => buildIndexes(tree), [tree]);
   const positionsByUnit = useMemo(() => {
@@ -503,16 +532,27 @@ export default function OrganizationPage() {
     return next;
   }, [positions]);
 
-  useEffect(() => {
-    Promise.all([getOrgTree(), listAllPositions()])
-      .then(([org, positionData]) => {
+  function applyLoadedData({
+    org,
+    positionData,
+    companyData,
+  }: Awaited<ReturnType<typeof loadOrganizationData>>) {
         const nextIndexes = buildIndexes(org.tree);
         setTree(org.tree);
         setPositions(positionData.data);
+        setCompanies(companyData.data);
         setTotal(org.total);
         setExpandedIDs(new Set(nextIndexes.defaultExpandedIDs));
-        setSelectedID(org.tree[0]?.id ?? null);
-      })
+        setSelectedID((current) => current && nextIndexes.byID.has(current) ? current : org.tree[0]?.id ?? null);
+  }
+
+  async function reload() {
+    applyLoadedData(await loadOrganizationData());
+  }
+
+  useEffect(() => {
+    loadOrganizationData()
+      .then(applyLoadedData)
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat data"),
       )
@@ -538,6 +578,46 @@ export default function OrganizationPage() {
   const departmentCount = indexes.countsByLevel.get("department") ?? 0;
   const divisionCount = indexes.countsByLevel.get("division") ?? 0;
   const activeRegionCount = indexes.regions.size;
+  const allUnits = useMemo(() => flattenUnits(tree), [tree]);
+  const managedCompanyIDs = new Set(me?.company_roles?.map((role) => role.company_id) ?? []);
+  const isSuperAdmin = Boolean(me?.capabilities?.is_super_admin);
+  const manageableCompanies = isSuperAdmin
+    ? companies
+    : companies.filter((company) => managedCompanyIDs.has(company.id));
+  const canManageSelected = Boolean(
+    selectedUnit && (isSuperAdmin || managedCompanyIDs.has(selectedUnit.company_id)),
+  );
+
+  async function saveUnit(payload: OrgUnitPayload) {
+    setBusy(true);
+    setFormError(null);
+    try {
+      if (formUnit) await updateOrgUnit(formUnit.id, payload);
+      else await createOrgUnit(payload);
+      await reload();
+      setFormUnit(undefined);
+      setSuggestedParent(null);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Gagal menyimpan unit");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSelectedUnit() {
+    if (!selectedUnit || !confirm(`Nonaktifkan unit ${selectedUnit.name}?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deactivateOrgUnit(selectedUnit.id);
+      setSelectedID(null);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menonaktifkan unit");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function toggleExpanded(id: string) {
     setExpandedIDs((current) => {
@@ -561,6 +641,53 @@ export default function OrganizationPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {manageableCompanies.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSuggestedParent(null);
+                  setFormError(null);
+                  setFormUnit(null);
+                }}
+                className="inline-flex items-center gap-2 rounded-lg bg-navy-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800"
+              >
+                <PlusIcon className="h-4 w-4" /> Tambah unit
+              </button>
+            )}
+            {canManageSelected && selectedUnit && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSuggestedParent(null);
+                    setFormError(null);
+                    setFormUnit(selectedUnit);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                >
+                  <EditIcon className="h-4 w-4" /> Edit unit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSuggestedParent(selectedUnit);
+                    setFormError(null);
+                    setFormUnit(null);
+                  }}
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                >
+                  Tambah sub-unit
+                </button>
+                <button
+                  type="button"
+                  onClick={removeSelectedUnit}
+                  disabled={busy}
+                  className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:bg-zinc-900 dark:text-red-300"
+                >
+                  Nonaktifkan
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={() => setExpandedIDs(new Set(indexes.allIDs))}
@@ -644,7 +771,7 @@ export default function OrganizationPage() {
 
       {!loading && !error && tree.length === 0 && (
         <p className="rounded-xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900">
-          Belum ada unit organisasi. Admin dapat menambahkan data organisasi via API.
+          Belum ada unit organisasi. Gunakan tombol Tambah unit untuk membuat struktur pertama.
         </p>
       )}
 
@@ -690,6 +817,25 @@ export default function OrganizationPage() {
             positions={selectedPositions}
           />
         </section>
+      )}
+
+      {formUnit !== undefined && (
+        <OrganizationUnitDialog
+          key={`${formUnit?.id ?? "new"}-${suggestedParent?.id ?? "root"}`}
+          unit={formUnit}
+          suggestedParent={suggestedParent}
+          companies={manageableCompanies}
+          units={allUnits}
+          busy={busy}
+          error={formError}
+          onClose={() => {
+            if (busy) return;
+            setFormUnit(undefined);
+            setSuggestedParent(null);
+            setFormError(null);
+          }}
+          onSave={saveUnit}
+        />
       )}
     </main>
   );

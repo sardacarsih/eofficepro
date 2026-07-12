@@ -232,6 +232,30 @@ export const getMe = () => apiFetch<User>("/auth/me");
 export const getOrgTree = () =>
   apiFetch<{ tree: OrgUnit[]; total: number }>("/org-units");
 
+export interface OrgUnitPayload {
+  company_id: string;
+  parent_id: string | null;
+  code: string;
+  name: string;
+  unit_level: "office" | "directorate" | "biro" | "department" | "division";
+  region: "HO" | "REG1" | "REG2" | "REPO_JKT" | "REPO_PKB" | null;
+}
+
+export const createOrgUnit = (payload: OrgUnitPayload) =>
+  apiFetch<{ id: string }>("/org-units", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateOrgUnit = (unitID: string, payload: OrgUnitPayload) =>
+  apiFetch<{ id: string }>(`/org-units/${unitID}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deactivateOrgUnit = (unitID: string) =>
+  apiFetch<{ id: string }>(`/org-units/${unitID}`, { method: "DELETE" });
+
 export interface Position {
   id: string;
   title: string;
@@ -1334,6 +1358,8 @@ export interface UserPayload {
 export interface UserCompanyRolePayload {
   company_id: string;
   role_code: "admin";
+  valid_from: string;
+  valid_to: string | null;
 }
 
 export interface UserPositionPayload {

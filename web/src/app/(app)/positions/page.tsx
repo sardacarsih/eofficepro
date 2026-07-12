@@ -97,7 +97,7 @@ function flattenOrgUnits(units: OrgUnit[]): OrgUnit[] {
 
 function unitLabel(unit: OrgUnit): string {
   const level = UNIT_LEVEL_LABEL[unit.unit_level] ?? unit.unit_level;
-  return `${unit.name} · ${level}${unit.region ? ` · ${unit.region}` : ""}`;
+  return `[${unit.company_code}] ${unit.name} · ${level}${unit.region ? ` · ${unit.region}` : ""}`;
 }
 
 function positionTitleSuggestion(positionType: string, unit?: OrgUnit): string {
@@ -949,7 +949,7 @@ export default function PositionsPage() {
                   </option>
                   {managerOptions.map((position) => (
                     <option key={position.id} value={position.id}>
-                      {position.title} · {position.org_unit_name}
+                      [{position.company_code}] {position.title} · {position.org_unit_name}
                     </option>
                   ))}
                 </select>

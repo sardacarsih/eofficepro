@@ -178,6 +178,8 @@ function compactPayload(form: UserFormState): UserPayload {
 		company_roles: form.company_roles.map((assignment) => ({
 			company_id: assignment.company_id,
 			role_code: "admin" as const,
+			valid_from: assignment.valid_from,
+			valid_to: assignment.valid_to,
 		})),
     positions: formPositionPayloads(form),
     ...(form.password.trim() ? { password: form.password } : {}),
@@ -494,6 +496,25 @@ export default function UsersPage() {
 		});
 	}
 
+	function updateCompanyAdminPeriod(
+		companyID: string,
+		field: "valid_from" | "valid_to",
+		value: string,
+	) {
+		setForm((current) =>
+			current
+				? {
+						...current,
+						company_roles: current.company_roles.map((assignment) =>
+							assignment.company_id === companyID
+								? { ...assignment, [field]: field === "valid_to" && !value ? null : value }
+								: assignment,
+						),
+					}
+				: current,
+		);
+	}
+
   function addPendingPosition() {
     setForm((current) => {
       if (!current || !current.new_position_id) return current;
@@ -599,6 +620,16 @@ export default function UsersPage() {
       if (form.roles.includes("creator") && formPositionPayloads(form).length === 0) {
         throw new Error("Role Creator wajib memiliki minimal satu jabatan aktif");
       }
+			for (const assignment of form.company_roles) {
+				if (!assignment.valid_from) {
+					throw new Error(`Tanggal mulai Admin ${assignment.company_name} wajib diisi`);
+				}
+				if (assignment.valid_to && assignment.valid_to <= assignment.valid_from) {
+					throw new Error(
+						`Tanggal akhir Admin ${assignment.company_name} harus setelah tanggal mulai`,
+					);
+				}
+			}
       const payload = compactPayload(form);
       if (editing) {
         await updateUser(editing.id, payload);
@@ -704,6 +735,8 @@ export default function UsersPage() {
 				company_roles: (user.company_roles ?? []).map((assignment) => ({
 					company_id: assignment.company_id,
 					role_code: "admin" as const,
+					valid_from: assignment.valid_from,
+					valid_to: assignment.valid_to,
 				})),
         positions: user.positions.map((position) => ({
           position_id: position.position_id,
@@ -1416,34 +1449,65 @@ export default function UsersPage() {
                   </fieldset>
 
 									<fieldset className="sm:col-span-2">
-										<legend className="mb-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+										<legend className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
 											Admin Perusahaan
 										</legend>
-										<p className="mb-2 text-xs text-zinc-500">
-											Pilih perusahaan yang boleh dikelola pengguna ini.
+										<p className="mt-1 text-xs text-zinc-500">
+											Pilih perusahaan dan periode kewenangan. Tanggal akhir bersifat eksklusif.
 										</p>
-										<div className="flex flex-wrap gap-2">
+										<div className="mt-3 grid gap-3 lg:grid-cols-2">
 											{companies.map((company) => {
-												const checked = form.company_roles.some(
-													(assignment) => assignment.company_id === company.id,
+												const assignment = form.company_roles.find(
+													(item) => item.company_id === company.id,
 												);
 												return (
-													<label
+													<div
 														key={company.id}
-														className={`inline-flex h-10 cursor-pointer items-center rounded-lg border px-3 text-sm font-semibold transition ${
-															checked
-																? "border-navy-600 bg-navy-50 text-navy-800 dark:border-sky-700 dark:bg-navy-950 dark:text-sky-200"
-																: "border-zinc-300 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
+														className={`rounded-xl border p-3 transition ${
+															assignment
+																? "border-navy-300 bg-navy-50/70 dark:border-sky-800 dark:bg-navy-950/40"
+																: "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950/40"
 														}`}
 													>
-														<input
-															type="checkbox"
-															checked={checked}
-															onChange={() => toggleCompanyAdmin(company)}
-															className="sr-only"
-														/>
-														[{company.code}] {company.name}
-													</label>
+														<label className="flex cursor-pointer items-center gap-3">
+															<input
+																type="checkbox"
+																checked={Boolean(assignment)}
+																onChange={() => toggleCompanyAdmin(company)}
+																className="h-4 w-4 rounded border-zinc-300 text-navy-700 focus:ring-sky-500"
+															/>
+															<span className="min-w-0">
+																<span className="block text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+																	[{company.code}] {company.name}
+																</span>
+																<span className="text-xs text-zinc-500">Kelola data dalam company scope ini</span>
+															</span>
+														</label>
+														{assignment && (
+															<div className="mt-3 grid gap-3 border-t border-navy-200 pt-3 sm:grid-cols-2 dark:border-navy-900">
+																<label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+																	Berlaku mulai
+																	<input
+																		type="date"
+																		value={assignment.valid_from}
+																		onChange={(event) => updateCompanyAdminPeriod(company.id, "valid_from", event.target.value)}
+																		required
+																		className="mt-1 h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+																	/>
+																</label>
+																<label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+																	Berakhir (opsional)
+																	<input
+																		type="date"
+																		value={assignment.valid_to ?? ""}
+																		min={assignment.valid_from}
+																		onChange={(event) => updateCompanyAdminPeriod(company.id, "valid_to", event.target.value)}
+																		className="mt-1 h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal text-zinc-950 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+																	/>
+																</label>
+															</div>
+														)}
+													</div>
 												);
 											})}
 										</div>
