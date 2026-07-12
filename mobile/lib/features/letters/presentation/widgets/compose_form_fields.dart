@@ -260,18 +260,13 @@ class ComposeFormFields extends StatelessWidget {
             .toList(),
         onChanged: state.formLocked
             ? null
-            : (value) => controller.editForm((form) => form.copyWith(
-                approvalCategoryId: value ?? '', requestedFinalLevel: '')),
+            : (value) {
+                if (value != null) controller.selectApprovalCategory(value);
+              },
       );
 
   Widget _finalLevelField() {
-    const levels = [
-      'dept_head',
-      'gm',
-      'director',
-      'vp_director',
-      'president_director'
-    ];
+    final levels = state.approvalRoute?.allowedLevels ?? const <String>[];
     return DropdownButtonFormField<String>(
       key: ValueKey('final-level-${state.form.requestedFinalLevel}'),
       initialValue: state.form.requestedFinalLevel.isEmpty
@@ -284,10 +279,11 @@ class ComposeFormFields extends StatelessWidget {
           .map((level) => DropdownMenuItem(
               value: level, child: Text(level.replaceAll('_', ' '))))
           .toList(),
-      onChanged: state.formLocked
+      onChanged: state.formLocked || levels.isEmpty
           ? null
-          : (value) => controller.editForm(
-              (form) => form.copyWith(requestedFinalLevel: value ?? '')),
+          : (value) {
+              if (value != null) controller.selectRequestedFinalLevel(value);
+            },
     );
   }
 

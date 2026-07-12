@@ -573,7 +573,7 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
 		LEFT JOIN LATERAL (
-			SELECT version, body_plain
+			SELECT version, body_html, body_plain
 			FROM letter_versions
 			WHERE letter_id = l.id
 			ORDER BY version DESC
@@ -662,7 +662,7 @@ func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (dr
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
 		LEFT JOIN LATERAL (
-			SELECT version, body_plain
+			SELECT version, body_html, body_plain
 			FROM letter_versions
 			WHERE letter_id = l.id
 			ORDER BY version DESC
@@ -707,7 +707,7 @@ func (h *Handler) renderAndStoreFinalPDF(ctx context.Context, tx pgx.Tx, letterI
 		return "", errors.New("surat tidak ditemukan untuk PDF final")
 	}
 	if err != nil {
-		return "", errors.New("gagal memuat data PDF final")
+		return "", fmt.Errorf("gagal memuat data PDF final: %w", err)
 	}
 	data.LetterNumber = letterNumber
 	data.PublishedAt = &publishedAt

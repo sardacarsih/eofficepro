@@ -114,15 +114,28 @@ class DraftComposerController
   Future<void> previewApprovalRoute() async {
     final current = _current;
     if (current == null) return;
-    final validation = current.validationMessage;
-    if (validation != null) {
-      state = AsyncData(current.copyWith(errorMessage: validation));
+    if (current.form.letterTypeId.isEmpty ||
+        current.form.creatorPositionId.isEmpty ||
+        !current.form.recipients
+            .any((item) => item.type == DraftRecipientType.to)) {
+      state = AsyncData(current.copyWith(
+          errorMessage:
+              'Jenis surat, jabatan pembuat, dan penerima To wajib tersedia untuk preview rute.'));
       return;
     }
     try {
-      final preview = await ref
-          .read(draftRepositoryProvider)
-          .previewApprovalRoute(payload: current.form.toPayload());
+      final preview =
+          await ref.read(draftRepositoryProvider).previewApprovalRoute(
+                letterTypeId: current.form.letterTypeId,
+                creatorPositionId: current.form.creatorPositionId,
+                recipients: current.form.recipients,
+                approvalCategoryId: current.form.approvalCategoryId.isEmpty
+                    ? null
+                    : current.form.approvalCategoryId,
+                requestedFinalLevel: current.form.requestedFinalLevel.isEmpty
+                    ? null
+                    : current.form.requestedFinalLevel,
+              );
       if (_current == null) return;
       var form = _current!.form;
       if (form.requestedFinalLevel.isEmpty && preview.finalLevel.isNotEmpty) {
@@ -135,6 +148,21 @@ class DraftComposerController
       state = AsyncData(_current!
           .copyWith(approvalRoute: null, errorMessage: _messageFor(error)));
     }
+  }
+
+  void selectApprovalCategory(String categoryId) {
+    final current = _current;
+    if (current == null) return;
+    updateForm(current.form
+        .copyWith(approvalCategoryId: categoryId, requestedFinalLevel: ''));
+    unawaited(previewApprovalRoute());
+  }
+
+  void selectRequestedFinalLevel(String level) {
+    final current = _current;
+    if (current == null) return;
+    updateForm(current.form.copyWith(requestedFinalLevel: level));
+    unawaited(previewApprovalRoute());
   }
 
   void selectCompany(String companyId) {

@@ -199,6 +199,7 @@ const LETTER_STATUS_STYLE: Record<DraftLetter["status"], string> = {
 };
 
 const MANAGER_OR_ABOVE_POSITION_TYPES = new Set([
+	"division_head",
   "dept_head",
   "gm",
   "director",

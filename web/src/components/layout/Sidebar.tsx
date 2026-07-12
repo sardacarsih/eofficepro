@@ -66,6 +66,12 @@ const NAV_ITEMS: NavItem[] = [
     roles: ["admin"],
   },
   {
+    href: "/approval-policies",
+    label: "Kebijakan Approval",
+    icon: CornerUpRightIcon,
+    roles: ["admin"],
+  },
+  {
     href: "/letter-templates",
     label: "Template",
     icon: LayersIcon,

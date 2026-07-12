@@ -799,6 +799,30 @@ export interface ApprovalRoutePreview {
 export const listApprovalCategories = () =>
   apiFetch<{ data: ApprovalCategory[] }>("/approval-categories");
 
+export const createApprovalCategory = (payload: { code: string; name: string }) =>
+  apiFetch<{ id: string }>("/approval-categories", { method: "POST", body: JSON.stringify(payload) });
+
+export const updateApprovalCategory = (id: string, payload: { code: string; name: string }) =>
+  apiFetch<{ id: string }>(`/approval-categories/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+export const deactivateApprovalCategory = (id: string) =>
+  apiFetch<{ id: string }>(`/approval-categories/${id}`, { method: "DELETE" });
+
+export interface CoordinationScopeRule {
+  scope: "same_unit" | "cross_department" | "cross_biro" | "cross_directorate" | "corporate";
+  final_level: ApprovalMatrixFinalLevel;
+  is_active: boolean;
+}
+
+export const listCoordinationScopeRules = () =>
+  apiFetch<{ data: CoordinationScopeRule[] }>("/coordination-scope-rules");
+
+export const updateCoordinationScopeRule = (scope: CoordinationScopeRule["scope"], finalLevel: ApprovalMatrixFinalLevel) =>
+  apiFetch<{ scope: string }>(`/coordination-scope-rules/${scope}`, {
+    method: "PUT",
+    body: JSON.stringify({ final_level: finalLevel }),
+  });
+
 export const previewApprovalRoute = (payload: {
   letter_type_id: string;
   creator_position_id: string;

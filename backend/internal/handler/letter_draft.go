@@ -237,6 +237,10 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := h.validateDraftApprovalPolicy(ctx, tx, req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := insertDraftRecipients(ctx, tx, id, req.Recipients); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyimpan penerima draft"})
 		return
@@ -317,6 +321,10 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		return
 	}
 	if err := h.validateDraftRecipientTargets(ctx, tx, req.CreatorPositionID, req.Recipients); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.validateDraftApprovalPolicy(ctx, tx, req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -688,7 +696,7 @@ func validateDraftRecipientDirectoratePolicy(creator draftPositionScope, recipie
 
 func isManagerOrAbovePositionType(positionType string) bool {
 	switch positionType {
-	case "sub_dept_head", "dept_head", "gm", "director", "vp_director", "president_director":
+	case "division_head", "sub_dept_head", "dept_head", "gm", "director", "vp_director", "president_director":
 		return true
 	default:
 		return false
@@ -745,6 +753,24 @@ func (h *Handler) defaultLetterClassification(ctx context.Context, letterTypeID 
 		FROM letter_types
 		WHERE id = $1 AND is_active`, letterTypeID).Scan(&classification)
 	return classification, err
+}
+
+func (h *Handler) validateDraftApprovalPolicy(ctx context.Context, tx pgx.Tx, req draftLetterRequest) error {
+	var code string
+	if err := tx.QueryRow(ctx, `SELECT code FROM letter_types WHERE id=$1 AND is_active`, req.LetterTypeID).Scan(&code); err != nil {
+		return errors.New("jenis surat tidak aktif atau tidak ditemukan")
+	}
+	if code == "PRS" {
+		if req.ApprovalCategoryID == nil || strings.TrimSpace(*req.ApprovalCategoryID) == "" {
+			return errors.New("kategori persetujuan wajib dipilih")
+		}
+		if req.RequestedFinalLevel == nil || strings.TrimSpace(*req.RequestedFinalLevel) == "" {
+			return errors.New("level akhir persetujuan wajib dipilih")
+		}
+	}
+	_, err := h.resolvePolicyRoute(ctx, tx, req.LetterTypeID, req.CreatorPositionID,
+		req.ApprovalCategoryID, req.RequestedFinalLevel, req.Recipients)
+	return err
 }
 
 func draftLetterSelect(suffix string) string {

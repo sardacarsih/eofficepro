@@ -267,16 +267,21 @@ class DraftRepository {
         .toList();
   }
 
-  Future<ApprovalRoutePreview> previewApprovalRoute(
-      {required DraftLetterPayload payload}) async {
+  Future<ApprovalRoutePreview> previewApprovalRoute({
+    required String letterTypeId,
+    required String creatorPositionId,
+    required List<DraftRecipient> recipients,
+    String? approvalCategoryId,
+    String? requestedFinalLevel,
+  }) async {
     try {
       final response = await _dio
           .post<Map<String, dynamic>>('/approval-routes/preview', data: {
-        'letter_type_id': payload.letterTypeId,
-        'creator_position_id': payload.creatorPositionId,
-        'approval_category_id': payload.approvalCategoryId,
-        'requested_final_level': payload.requestedFinalLevel,
-        'recipients': payload.recipients.map((item) => item.toJson()).toList(),
+        'letter_type_id': letterTypeId,
+        'creator_position_id': creatorPositionId,
+        'approval_category_id': approvalCategoryId,
+        'requested_final_level': requestedFinalLevel,
+        'recipients': recipients.map((item) => item.toJson()).toList(),
       });
       return ApprovalRoutePreview.fromJson(response.data ?? const {});
     } catch (error) {

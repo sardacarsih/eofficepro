@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -243,6 +244,12 @@ func (h *Handler) resolvePolicyRoute(ctx context.Context, db policyQueryer, lett
 		if err := db.QueryRow(ctx, `SELECT final_level FROM coordination_scope_rules WHERE scope=$1 AND is_active`, scope).Scan(&finalLevel); err != nil {
 			return ApprovalRoutePreview{}, errors.New("aturan cakupan koordinasi belum dikonfigurasi")
 		}
+		if scope == "same_unit" {
+			finalLevel, err = resolveSameUnitFinalLevel(ctx, db, creatorPositionID, finalLevel)
+			if err != nil {
+				return ApprovalRoutePreview{}, err
+			}
+		}
 	}
 
 	route, err := buildRouteToLevel(ctx, db, creatorPositionID, finalLevel)
@@ -292,13 +299,17 @@ func resolveCoordinationScope(ctx context.Context, db policyQueryer, creatorPosi
 		return "", errors.New("unit jabatan pembuat tidak ditemukan")
 	}
 	scopeRank := 0
+	targetDirectorates := map[string]bool{}
 	for _, recipient := range recipients {
 		if recipient.Type != "to" {
 			continue
 		}
 		target, err := loadPositionAncestry(ctx, db, recipient.TargetID, recipient.TargetType)
 		if err != nil {
-			return "", errors.New("unit penerima koordinasi tidak ditemukan")
+			return "", fmt.Errorf("penerima koordinasi %s (%s) tidak ditemukan atau tidak aktif", recipient.TargetID, recipient.TargetType)
+		}
+		if target.directorate != "" {
+			targetDirectorates[target.directorate] = true
 		}
 		rank := 0
 		switch {
@@ -315,7 +326,44 @@ func resolveCoordinationScope(ctx context.Context, db policyQueryer, creatorPosi
 			scopeRank = rank
 		}
 	}
+	if scopeRank == 3 {
+		var totalDirectorates int
+		err := db.QueryRow(ctx, `
+			SELECT count(*) FROM org_units
+			WHERE company_id=(SELECT ou.company_id FROM positions p JOIN org_units ou ON ou.id=p.org_unit_id WHERE p.id=$1)
+			  AND unit_level='directorate' AND is_active`, creatorPositionID).Scan(&totalDirectorates)
+		if err != nil {
+			return "", errors.New("gagal menghitung cakupan direktorat aktif")
+		}
+		scopeRank = promoteCorporateScope(scopeRank, len(targetDirectorates), totalDirectorates)
+	}
 	return []string{"same_unit", "cross_department", "cross_biro", "cross_directorate", "corporate"}[scopeRank], nil
+}
+
+func resolveSameUnitFinalLevel(ctx context.Context, db policyQueryer, creatorPositionID, fallback string) (string, error) {
+	var positionType, unitLevel string
+	err := db.QueryRow(ctx, `
+		SELECT p.position_type, ou.unit_level
+		FROM positions p JOIN org_units ou ON ou.id=p.org_unit_id
+		WHERE p.id=$1 AND p.is_active AND ou.is_active`, creatorPositionID).Scan(&positionType, &unitLevel)
+	if err != nil {
+		return "", errors.New("jabatan pembuat tidak aktif")
+	}
+	return sameUnitFinalLevel(positionType, unitLevel, fallback), nil
+}
+
+func sameUnitFinalLevel(positionType, unitLevel, fallback string) string {
+	if unitLevel == "division" && approvalLevelRank[positionType] < approvalLevelRank["division_head"] {
+		return "division_head"
+	}
+	return fallback
+}
+
+func promoteCorporateScope(scopeRank, targetedDirectorates, totalDirectorates int) int {
+	if scopeRank == 3 && totalDirectorates > 0 && targetedDirectorates >= totalDirectorates {
+		return 4
+	}
+	return scopeRank
 }
 
 func loadPositionAncestry(ctx context.Context, db policyQueryer, id, targetType string) (orgAncestry, error) {

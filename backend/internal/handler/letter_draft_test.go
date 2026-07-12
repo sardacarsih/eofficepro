@@ -34,11 +34,10 @@ func TestValidateDraftRecipientDirectoratePolicy(t *testing.T) {
 			targetDir:   &dirA,
 		},
 		{
-			name:        "division_head_cross_directorate_rejected",
+			name:        "division_head_cross_directorate_allowed",
 			creatorType: "division_head",
 			targetType:  "position",
 			targetDir:   &dirB,
-			wantErr:     true,
 		},
 		{
 			name:        "division_head_same_directorate_allowed",

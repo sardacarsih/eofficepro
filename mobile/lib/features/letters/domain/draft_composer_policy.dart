@@ -15,6 +15,7 @@ String? defaultOnBehalfPositionId(
 
 bool isManagerOrAbovePositionType(String positionType) {
   return const {
+    'division_head',
     'sub_dept_head',
     'dept_head',
     'gm',
