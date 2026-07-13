@@ -6,12 +6,14 @@ import {
   createApprovalMatrix,
   deactivateApprovalMatrix,
   listApprovalMatrices,
+  listApprovalCategories,
   listAllLetterTypes,
   updateApprovalMatrix,
   type ApprovalMatrix,
   type ApprovalMatrixFinalLevel,
   type ApprovalMatrixPayload,
   type ApprovalMatrixPositionLevel,
+  type ApprovalCategory,
   type LetterType,
   type PageMeta,
 } from "@/lib/api";
@@ -55,6 +57,10 @@ interface MatrixFormState {
   originator_level: "" | ApprovalMatrixPositionLevel;
   final_level: ApprovalMatrixFinalLevel;
   is_active: boolean;
+  approval_category_id: string;
+  resolution_mode: "fixed" | "user_selected" | "scope_derived";
+  min_final_level: ApprovalMatrixFinalLevel | "";
+  max_final_level: ApprovalMatrixFinalLevel | "";
 }
 
 function emptyForm(letterTypes: LetterType[]): MatrixFormState {
@@ -63,6 +69,10 @@ function emptyForm(letterTypes: LetterType[]): MatrixFormState {
     originator_level: "",
     final_level: "director",
     is_active: true,
+    approval_category_id: "",
+    resolution_mode: "fixed",
+    min_final_level: "",
+    max_final_level: "",
   };
 }
 
@@ -72,6 +82,10 @@ function matrixToForm(matrix: ApprovalMatrix): MatrixFormState {
     originator_level: matrix.originator_level ?? "",
     final_level: matrix.final_level,
     is_active: matrix.is_active,
+    approval_category_id: matrix.approval_category_id ?? "",
+    resolution_mode: matrix.resolution_mode,
+    min_final_level: matrix.min_final_level ?? "",
+    max_final_level: matrix.max_final_level ?? "",
   };
 }
 
@@ -82,6 +96,10 @@ function compactPayload(form: MatrixFormState): ApprovalMatrixPayload {
     final_level: form.final_level,
     flow_mode: "serial",
     is_active: form.is_active,
+    approval_category_id: form.approval_category_id || null,
+    resolution_mode: form.resolution_mode,
+    min_final_level: form.min_final_level || null,
+    max_final_level: form.max_final_level || null,
   };
 }
 
@@ -117,6 +135,7 @@ export default function ApprovalMatricesPage() {
   const [page, setPage] = useState(1);
   const [meta, setMeta] = useState<PageMeta | null>(null);
   const [letterTypes, setLetterTypes] = useState<LetterType[]>([]);
+  const [categories, setCategories] = useState<ApprovalCategory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,17 +146,19 @@ export default function ApprovalMatricesPage() {
   const modalOpen = editing !== null || form !== null;
 
   async function reload() {
-    const [matrixData, typeData] = await Promise.all([
+	const [matrixData, typeData, categoryData] = await Promise.all([
       listApprovalMatrices({ includeInactive: true, page }),
       listAllLetterTypes(true),
+	  listApprovalCategories(),
     ]);
     setMatrices(matrixData.data);
     setMeta(matrixData.meta);
     setLetterTypes(typeData.data);
+	setCategories(categoryData.data);
   }
 
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) {
+		if (me && !me.capabilities?.is_super_admin) {
       router.replace("/organization");
     }
   }, [me, router]);
@@ -147,11 +168,13 @@ export default function ApprovalMatricesPage() {
     Promise.all([
       listApprovalMatrices({ includeInactive: true, page }),
       listAllLetterTypes(true),
+	  listApprovalCategories(),
     ])
-      .then(([matrixData, typeData]) => {
+	  .then(([matrixData, typeData, categoryData]) => {
         setMatrices(matrixData.data);
         setMeta(matrixData.meta);
         setLetterTypes(typeData.data);
+		setCategories(categoryData.data);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Gagal memuat matrix approval"),
@@ -314,6 +337,7 @@ export default function ApprovalMatricesPage() {
                         </td>
                         <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {levelLabel(matrix.originator_level)}
+                          {matrix.approval_category_name ? ` · ${matrix.approval_category_name}` : ""}
                         </td>
                         <td className="px-4 py-3">
                           <span
@@ -484,6 +508,38 @@ export default function ApprovalMatricesPage() {
                   ))}
                 </select>
               </label>
+
+			  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+				Kategori
+				<select value={form.approval_category_id} onChange={(e) => setForm((current) => current ? { ...current, approval_category_id: e.target.value } : current)}
+				  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal dark:border-zinc-700 dark:bg-zinc-950">
+				  <option value="">Tanpa kategori</option>
+				  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+				</select>
+			  </label>
+
+			  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+				Mode Resolusi
+				<select value={form.resolution_mode} onChange={(e) => setForm((current) => current ? { ...current, resolution_mode: e.target.value as MatrixFormState["resolution_mode"] } : current)}
+				  className="h-10 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-normal dark:border-zinc-700 dark:bg-zinc-950">
+				  <option value="fixed">Tetap</option><option value="user_selected">Dipilih pengguna</option><option value="scope_derived">Dari cakupan</option>
+				</select>
+			  </label>
+
+			  {form.resolution_mode === "user_selected" && (
+				<>
+				  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">Level Minimum
+					<select value={form.min_final_level} onChange={(e) => setForm((current) => current ? { ...current, min_final_level: e.target.value as MatrixFormState["min_final_level"] } : current)} className="h-10 rounded-lg border border-zinc-300 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-950">
+					  <option value="">Pilih</option>{FINAL_LEVELS.map((level) => <option key={level} value={level}>{levelLabel(level)}</option>)}
+					</select>
+				  </label>
+				  <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">Level Maksimum
+					<select value={form.max_final_level} onChange={(e) => setForm((current) => current ? { ...current, max_final_level: e.target.value as MatrixFormState["max_final_level"] } : current)} className="h-10 rounded-lg border border-zinc-300 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-950">
+					  <option value="">Pilih</option>{FINAL_LEVELS.map((level) => <option key={level} value={level}>{levelLabel(level)}</option>)}
+					</select>
+				  </label>
+				</>
+			  )}
 
               <label className="flex flex-col gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
                 Mode

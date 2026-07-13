@@ -14,7 +14,6 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -65,9 +64,18 @@ type Company struct {
 func (h *Handler) ListCompanies(c *gin.Context) {
 	includeInactive := c.Query("include_inactive") == "true"
 	if includeInactive {
-		roles, _ := c.Get(middleware.CtxRoles)
-		userRoles, _ := roles.([]string)
-		if !slices.Contains(userRoles, "admin") {
+		userID := c.GetString(middleware.CtxUserID)
+		isSuperAdmin, err := h.userIsSuperAdmin(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses perusahaan"})
+			return
+		}
+		companyRoles, err := h.companyRoles(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses perusahaan"})
+			return
+		}
+		if !isSuperAdmin && len(companyRoles) == 0 {
 			c.JSON(http.StatusForbidden, gin.H{"error": "hanya admin yang dapat melihat perusahaan nonaktif"})
 			return
 		}
@@ -79,23 +87,30 @@ func (h *Handler) ListCompanies(c *gin.Context) {
 		return
 	}
 
-	whereClause := ""
-	if !includeInactive {
-		whereClause = ` WHERE is_active`
-	}
-
 	ctx := c.Request.Context()
-	var total int64
-	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM companies`+whereClause).Scan(&total); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghitung perusahaan"})
+	accessible, err := h.accessibleCompanies(ctx, c.GetString(middleware.CtxUserID), includeInactive)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat perusahaan"})
 		return
+	}
+	total := int64(len(accessible))
+	if offset >= len(accessible) {
+		c.JSON(http.StatusOK, gin.H{"data": []Company{}, "meta": newPageMeta(page, pageSize, total)})
+		return
+	}
+	end := min(offset+pageSize, len(accessible))
+	companyIDs := make([]string, 0, end-offset)
+	for _, company := range accessible[offset:end] {
+		companyIDs = append(companyIDs, company.ID)
 	}
 
 	query := `
 		SELECT id::text, code, name, is_active, letterhead_config
-		FROM companies` + whereClause + ` ORDER BY code LIMIT $1 OFFSET $2`
+		FROM companies
+		WHERE id::text = ANY($1::text[])
+		ORDER BY code`
 
-	rows, err := h.DB.Query(ctx, query, pageSize, offset)
+	rows, err := h.DB.Query(ctx, query, companyIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat perusahaan"})
 		return
@@ -164,6 +179,11 @@ func normalizeAndValidateCompanyRequest(req *companyRequest) error {
 }
 
 func (h *Handler) CreateCompany(c *gin.Context) {
+	isSuperAdmin, err := h.userIsSuperAdmin(c.Request.Context(), c.GetString(middleware.CtxUserID))
+	if err != nil || !isSuperAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "hanya super admin yang dapat membuat perusahaan"})
+		return
+	}
 	var req companyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "kode dan nama perusahaan wajib diisi"})
@@ -197,6 +217,9 @@ func (h *Handler) CreateCompany(c *gin.Context) {
 
 func (h *Handler) UpdateCompany(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))
+	if !h.requireAdminCompany(c, id) {
+		return
+	}
 	var req companyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "kode dan nama perusahaan wajib diisi"})
@@ -232,6 +255,9 @@ func (h *Handler) UpdateCompany(c *gin.Context) {
 
 func (h *Handler) DeactivateCompany(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))
+	if !h.requireAdminCompany(c, id) {
+		return
+	}
 	ctx := c.Request.Context()
 	tag, err := h.DB.Exec(ctx, `
 		UPDATE companies
@@ -281,6 +307,9 @@ func (h *Handler) UploadCompanyLogo(c *gin.Context) {
 	logo.FileName = safeObjectFileName(fileHeader.Filename)
 
 	companyID := strings.TrimSpace(c.Param("id"))
+	if !h.requireAdminCompany(c, companyID) {
+		return
+	}
 	ctx := c.Request.Context()
 	tx, err := h.DB.Begin(ctx)
 	if err != nil {
@@ -353,6 +382,9 @@ func (h *Handler) UploadCompanyLogo(c *gin.Context) {
 
 func (h *Handler) DeleteCompanyLogo(c *gin.Context) {
 	companyID := strings.TrimSpace(c.Param("id"))
+	if !h.requireAdminCompany(c, companyID) {
+		return
+	}
 	ctx := c.Request.Context()
 	tx, err := h.DB.Begin(ctx)
 	if err != nil {

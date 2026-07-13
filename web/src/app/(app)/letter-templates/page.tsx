@@ -112,7 +112,7 @@ export default function LetterTemplatesPage() {
 
   // Halaman khusus admin — alihkan role lain setelah profil termuat.
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) {
+		if (me && !me.capabilities?.is_super_admin && !me.company_roles?.some((role) => role.role_code === "admin")) {
       router.replace("/organization");
     }
   }, [me, router]);
@@ -424,7 +424,7 @@ export default function LetterTemplatesPage() {
                 >
                   {companies.map((company) => (
                     <option key={company.id} value={company.id}>
-                      {company.code}
+                      [{company.code}] {company.name}
                     </option>
                   ))}
                 </select>

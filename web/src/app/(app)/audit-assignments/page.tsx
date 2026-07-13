@@ -71,7 +71,7 @@ export default function AuditAssignmentsPage() {
   const [form, setForm] = useState<FormState | null>(null);
 
   useEffect(() => {
-    if (me && !me.roles.includes("admin")) router.replace("/organization");
+		if (me && !me.capabilities?.is_super_admin) router.replace("/organization");
   }, [me, router]);
 
   async function reload() {

@@ -26,6 +26,7 @@
 | E00-4 | Object storage lampiran (S3-compatible/MinIO) + enkripsi at-rest | Upload/download via pre-signed URL | 5 |
 | E00-5 | Logging terstruktur, monitoring, health check | Dashboard uptime & error rate | 3 |
 | E00-6 | Backup otomatis harian + prosedur restore teruji | Restore drill sukses di staging | 3 |
+| E00-7 | Setup Playwright smoke test alur kritis web (login, tulis surat, approval, disposisi) | Berjalan lokal & di CI; kegagalan memblokir merge | 3 |
 
 ## EPIC 01 — Autentikasi & Manajemen Pengguna/Organisasi (P0-1, P0-10) ✅ SELESAI (7 Jul 2026)
 > Catatan penyelesaian: semua ticket terimplementasi & teruji end-to-end.

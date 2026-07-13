@@ -52,6 +52,11 @@ class ComposeFormFields extends StatelessWidget {
                     width: fieldWidth,
                     child: _creatorPositionField(),
                   ),
+                  if (_selectedLetterTypeCode == 'PRS') ...[
+                    SizedBox(
+                        width: fieldWidth, child: _approvalCategoryField()),
+                    SizedBox(width: fieldWidth, child: _finalLevelField()),
+                  ],
                   SizedBox(
                     width: fieldWidth,
                     child: _templateField(),
@@ -73,6 +78,30 @@ class ComposeFormFields extends StatelessWidget {
                   title: state.onBehalfPosition?.title ??
                       state.selectedCreatorPosition?.reportsToTitle ??
                       'Atasan langsung belum tersedia',
+                ),
+              ],
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed:
+                    state.formLocked ? null : controller.previewApprovalRoute,
+                icon: const Icon(Icons.route_outlined),
+                label: const Text('Tampilkan rute approval'),
+              ),
+              if (state.approvalRoute case final route?) ...[
+                const SizedBox(height: 8),
+                Semantics(
+                  label: 'Rute approval sampai ${route.finalLevel}',
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text([
+                        if (route.coordinationScope != null)
+                          'Cakupan: ${route.coordinationScope}',
+                        'Level akhir: ${route.finalLevel}',
+                        route.steps.join(' → '),
+                      ].join('\n')),
+                    ),
+                  ),
                 ),
               ],
               const SizedBox(height: 24),
@@ -206,6 +235,54 @@ class ComposeFormFields extends StatelessWidget {
           ? null
           : (value) {
               if (value != null) controller.selectCreatorPosition(value);
+            },
+    );
+  }
+
+  String get _selectedLetterTypeCode {
+    for (final type in state.bootstrap.letterTypes) {
+      if (type.id == state.form.letterTypeId) return type.code;
+    }
+    return '';
+  }
+
+  Widget _approvalCategoryField() => DropdownButtonFormField<String>(
+        key: ValueKey('approval-category-${state.form.approvalCategoryId}'),
+        initialValue: state.form.approvalCategoryId.isEmpty
+            ? null
+            : state.form.approvalCategoryId,
+        decoration: const InputDecoration(
+            labelText: 'Kategori Persetujuan',
+            prefixIcon: Icon(Icons.category_outlined)),
+        items: state.bootstrap.approvalCategories
+            .map((item) =>
+                DropdownMenuItem(value: item.id, child: Text(item.name)))
+            .toList(),
+        onChanged: state.formLocked
+            ? null
+            : (value) {
+                if (value != null) controller.selectApprovalCategory(value);
+              },
+      );
+
+  Widget _finalLevelField() {
+    final levels = state.approvalRoute?.allowedLevels ?? const <String>[];
+    return DropdownButtonFormField<String>(
+      key: ValueKey('final-level-${state.form.requestedFinalLevel}'),
+      initialValue: state.form.requestedFinalLevel.isEmpty
+          ? null
+          : state.form.requestedFinalLevel,
+      decoration: const InputDecoration(
+          labelText: 'Level Akhir',
+          prefixIcon: Icon(Icons.account_tree_outlined)),
+      items: levels
+          .map((level) => DropdownMenuItem(
+              value: level, child: Text(level.replaceAll('_', ' '))))
+          .toList(),
+      onChanged: state.formLocked || levels.isEmpty
+          ? null
+          : (value) {
+              if (value != null) controller.selectRequestedFinalLevel(value);
             },
     );
   }

@@ -18,29 +18,34 @@ import (
 )
 
 type DraftLetter struct {
-	ID                   string           `json:"id"`
-	CompanyID            string           `json:"company_id"`
-	CompanyCode          string           `json:"company_code"`
-	CompanyName          string           `json:"company_name"`
-	LetterTypeID         string           `json:"letter_type_id"`
-	LetterTypeCode       string           `json:"letter_type_code"`
-	LetterTypeName       string           `json:"letter_type_name"`
-	LetterNumber         *string          `json:"letter_number"`
-	Subject              string           `json:"subject"`
-	Classification       string           `json:"classification"`
-	Priority             string           `json:"priority"`
-	Status               string           `json:"status"`
-	CreatorPositionID    string           `json:"creator_position_id"`
-	CreatorPositionTitle string           `json:"creator_position_title"`
-	OnBehalfOfPositionID *string          `json:"on_behalf_of_position_id"`
-	OnBehalfOfTitle      *string          `json:"on_behalf_of_title"`
-	TemplateID           *string          `json:"template_id"`
-	Version              int              `json:"version"`
-	BodyHTML             string           `json:"body_html"`
-	BodyPlain            string           `json:"body_plain"`
-	Recipients           []DraftRecipient `json:"recipients"`
-	CreatedAt            time.Time        `json:"created_at"`
-	UpdatedAt            time.Time        `json:"updated_at"`
+	ID                     string           `json:"id"`
+	CompanyID              string           `json:"company_id"`
+	CompanyCode            string           `json:"company_code"`
+	CompanyName            string           `json:"company_name"`
+	LetterTypeID           string           `json:"letter_type_id"`
+	LetterTypeCode         string           `json:"letter_type_code"`
+	LetterTypeName         string           `json:"letter_type_name"`
+	LetterNumber           *string          `json:"letter_number"`
+	Subject                string           `json:"subject"`
+	Classification         string           `json:"classification"`
+	Priority               string           `json:"priority"`
+	Status                 string           `json:"status"`
+	CreatorPositionID      string           `json:"creator_position_id"`
+	CreatorPositionTitle   string           `json:"creator_position_title"`
+	OnBehalfOfPositionID   *string          `json:"on_behalf_of_position_id"`
+	OnBehalfOfTitle        *string          `json:"on_behalf_of_title"`
+	TemplateID             *string          `json:"template_id"`
+	ApprovalCategoryID     *string          `json:"approval_category_id"`
+	RequestedFinalLevel    *string          `json:"requested_final_level"`
+	ResolvedFinalLevel     *string          `json:"resolved_final_level"`
+	CoordinationScope      *string          `json:"coordination_scope"`
+	ApprovalResolutionMode *string          `json:"approval_resolution_mode"`
+	Version                int              `json:"version"`
+	BodyHTML               string           `json:"body_html"`
+	BodyPlain              string           `json:"body_plain"`
+	Recipients             []DraftRecipient `json:"recipients"`
+	CreatedAt              time.Time        `json:"created_at"`
+	UpdatedAt              time.Time        `json:"updated_at"`
 }
 
 type DraftRecipient struct {
@@ -56,6 +61,8 @@ type draftLetterRequest struct {
 	CreatorPositionID    string                  `json:"creator_position_id"`
 	OnBehalfOfPositionID *string                 `json:"on_behalf_of_position_id"`
 	TemplateID           *string                 `json:"template_id"`
+	ApprovalCategoryID   *string                 `json:"approval_category_id"`
+	RequestedFinalLevel  *string                 `json:"requested_final_level"`
 	BaseVersion          *int                    `json:"base_version"`
 	Subject              string                  `json:"subject"`
 	Classification       string                  `json:"classification"`
@@ -204,8 +211,9 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 		INSERT INTO letters
 			(company_id, letter_type_id, subject, classification, priority,
 			 creator_user_id, creator_position_id, on_behalf_of_position_id,
-			 template_id, template_version, template_snapshot)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 template_id, template_version, template_snapshot,
+			 approval_category_id, requested_final_level)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id::text`,
 		req.CompanyID,
 		req.LetterTypeID,
@@ -218,12 +226,18 @@ func (h *Handler) CreateDraftLetter(c *gin.Context) {
 		req.TemplateID,
 		templateVersion,
 		templateSnapshot,
+		req.ApprovalCategoryID,
+		req.RequestedFinalLevel,
 	).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gagal membuat draft (perusahaan atau jenis surat tidak valid)"})
 		return
 	}
 	if err := h.validateDraftRecipientTargets(ctx, tx, req.CreatorPositionID, req.Recipients); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.validateDraftApprovalPolicy(ctx, tx, req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -310,6 +324,10 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := h.validateDraftApprovalPolicy(ctx, tx, req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := validateDraftOnBehalf(ctx, tx, req.CreatorPositionID, req.OnBehalfOfPositionID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -340,6 +358,7 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		    classification = $5, priority = $6, creator_position_id = $7,
 		    on_behalf_of_position_id = $8, template_id = $9,
 		    template_version = $10, template_snapshot = $11,
+		    approval_category_id = $13, requested_final_level = $14,
 		    updated_at = now()
 		WHERE id = $1 AND creator_user_id = $12`,
 		id,
@@ -354,6 +373,8 @@ func (h *Handler) UpdateDraftLetter(c *gin.Context) {
 		templateVersion,
 		templateSnapshot,
 		userID,
+		req.ApprovalCategoryID,
+		req.RequestedFinalLevel,
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gagal memperbarui draft (perusahaan atau jenis surat tidak valid)"})
@@ -675,7 +696,7 @@ func validateDraftRecipientDirectoratePolicy(creator draftPositionScope, recipie
 
 func isManagerOrAbovePositionType(positionType string) bool {
 	switch positionType {
-	case "sub_dept_head", "dept_head", "gm", "director", "vp_director", "president_director":
+	case "division_head", "sub_dept_head", "dept_head", "gm", "director", "vp_director", "president_director":
 		return true
 	default:
 		return false
@@ -734,6 +755,24 @@ func (h *Handler) defaultLetterClassification(ctx context.Context, letterTypeID 
 	return classification, err
 }
 
+func (h *Handler) validateDraftApprovalPolicy(ctx context.Context, tx pgx.Tx, req draftLetterRequest) error {
+	var code string
+	if err := tx.QueryRow(ctx, `SELECT code FROM letter_types WHERE id=$1 AND is_active`, req.LetterTypeID).Scan(&code); err != nil {
+		return errors.New("jenis surat tidak aktif atau tidak ditemukan")
+	}
+	if code == "PRS" {
+		if req.ApprovalCategoryID == nil || strings.TrimSpace(*req.ApprovalCategoryID) == "" {
+			return errors.New("kategori persetujuan wajib dipilih")
+		}
+		if req.RequestedFinalLevel == nil || strings.TrimSpace(*req.RequestedFinalLevel) == "" {
+			return errors.New("level akhir persetujuan wajib dipilih")
+		}
+	}
+	_, err := h.resolvePolicyRoute(ctx, tx, req.LetterTypeID, req.CreatorPositionID,
+		req.ApprovalCategoryID, req.RequestedFinalLevel, req.Recipients)
+	return err
+}
+
 func draftLetterSelect(suffix string) string {
 	return `
 		SELECT l.id::text, l.company_id::text, co.code, co.name,
@@ -742,6 +781,8 @@ func draftLetterSelect(suffix string) string {
 		       l.creator_position_id::text, p.title,
 		       l.on_behalf_of_position_id::text, obp.title,
 		       l.template_id::text,
+		       l.approval_category_id::text, l.requested_final_level,
+		       l.resolved_final_level, l.coordination_scope, l.approval_resolution_mode,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''),
 		       COALESCE(v.body_plain, ''), l.created_at, l.updated_at
 		FROM letters l
@@ -781,6 +822,11 @@ func scanDraftLetters(c *gin.Context, rows pgx.Rows) ([]DraftLetter, bool) {
 			&letter.OnBehalfOfPositionID,
 			&letter.OnBehalfOfTitle,
 			&letter.TemplateID,
+			&letter.ApprovalCategoryID,
+			&letter.RequestedFinalLevel,
+			&letter.ResolvedFinalLevel,
+			&letter.CoordinationScope,
+			&letter.ApprovalResolutionMode,
 			&letter.Version,
 			&letter.BodyHTML,
 			&letter.BodyPlain,

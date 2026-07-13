@@ -13,6 +13,8 @@ class ApprovalInboxItem {
     required this.bodyPlain,
     required this.attachmentCount,
     required this.updatedAt,
+    this.isDelegated = false,
+    this.delegatedFromTitle,
   });
 
   final String stepId;
@@ -28,6 +30,8 @@ class ApprovalInboxItem {
   final String bodyPlain;
   final int attachmentCount;
   final String updatedAt;
+  final bool isDelegated;
+  final String? delegatedFromTitle;
 
   factory ApprovalInboxItem.fromJson(Map<String, dynamic> json) {
     return ApprovalInboxItem(
@@ -44,6 +48,8 @@ class ApprovalInboxItem {
       bodyPlain: json['body_plain'] as String? ?? '',
       attachmentCount: json['attachment_count'] as int? ?? 0,
       updatedAt: json['updated_at'] as String? ?? '',
+      isDelegated: json['is_delegated'] as bool? ?? false,
+      delegatedFromTitle: json['delegated_from_title'] as String?,
     );
   }
 }
@@ -127,6 +133,10 @@ class LetterDetail {
     this.verifyUrl,
     this.finalPdfUrl,
     this.publishedAt,
+    this.cancelledAt,
+    this.cancelledByName,
+    this.cancelReason,
+    this.canCancel = false,
   });
 
   final String id;
@@ -153,6 +163,10 @@ class LetterDetail {
   final String createdAt;
   final String updatedAt;
   final String? publishedAt;
+  final String? cancelledAt;
+  final String? cancelledByName;
+  final String? cancelReason;
+  final bool canCancel;
 
   factory LetterDetail.fromJson(Map<String, dynamic> json) {
     return LetterDetail(
@@ -192,6 +206,10 @@ class LetterDetail {
       createdAt: json['created_at'] as String? ?? '',
       updatedAt: json['updated_at'] as String? ?? '',
       publishedAt: json['published_at'] as String?,
+      cancelledAt: json['cancelled_at'] as String?,
+      cancelledByName: json['cancelled_by_name'] as String?,
+      cancelReason: json['cancel_reason'] as String?,
+      canCancel: json['can_cancel'] as bool? ?? false,
     );
   }
 }
@@ -287,6 +305,8 @@ class LetterApprovalAction {
     required this.positionTitle,
     required this.signaturePresent,
     this.note,
+    this.onBehalfOf = false,
+    this.onBehalfOfPositionTitle,
   });
 
   final String id;
@@ -297,6 +317,8 @@ class LetterApprovalAction {
   final String positionTitle;
   final bool signaturePresent;
   final String? note;
+  final bool onBehalfOf;
+  final String? onBehalfOfPositionTitle;
 
   factory LetterApprovalAction.fromJson(Map<String, dynamic> json) {
     return LetterApprovalAction(
@@ -308,6 +330,8 @@ class LetterApprovalAction {
       positionTitle: json['position_title'] as String? ?? '',
       signaturePresent: json['signature_present'] as bool? ?? false,
       note: json['note'] as String?,
+      onBehalfOf: json['on_behalf_of'] as bool? ?? false,
+      onBehalfOfPositionTitle: json['on_behalf_of_position_title'] as String?,
     );
   }
 }

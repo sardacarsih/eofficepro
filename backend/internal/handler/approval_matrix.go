@@ -14,24 +14,33 @@ import (
 )
 
 type ApprovalMatrix struct {
-	ID              string     `json:"id"`
-	LetterTypeID    string     `json:"letter_type_id"`
-	LetterTypeCode  string     `json:"letter_type_code"`
-	LetterTypeName  string     `json:"letter_type_name"`
-	OriginatorLevel *string    `json:"originator_level"`
-	FinalLevel      string     `json:"final_level"`
-	FlowMode        string     `json:"flow_mode"`
-	IsActive        bool       `json:"is_active"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       *time.Time `json:"updated_at"`
+	ID                   string     `json:"id"`
+	LetterTypeID         string     `json:"letter_type_id"`
+	LetterTypeCode       string     `json:"letter_type_code"`
+	LetterTypeName       string     `json:"letter_type_name"`
+	OriginatorLevel      *string    `json:"originator_level"`
+	ApprovalCategoryID   *string    `json:"approval_category_id"`
+	ApprovalCategoryName *string    `json:"approval_category_name"`
+	ResolutionMode       string     `json:"resolution_mode"`
+	MinFinalLevel        *string    `json:"min_final_level"`
+	MaxFinalLevel        *string    `json:"max_final_level"`
+	FinalLevel           string     `json:"final_level"`
+	FlowMode             string     `json:"flow_mode"`
+	IsActive             bool       `json:"is_active"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            *time.Time `json:"updated_at"`
 }
 
 type approvalMatrixRequest struct {
-	LetterTypeID    string  `json:"letter_type_id" binding:"required"`
-	OriginatorLevel *string `json:"originator_level"`
-	FinalLevel      string  `json:"final_level" binding:"required"`
-	FlowMode        string  `json:"flow_mode"`
-	IsActive        *bool   `json:"is_active"`
+	LetterTypeID       string  `json:"letter_type_id" binding:"required"`
+	OriginatorLevel    *string `json:"originator_level"`
+	ApprovalCategoryID *string `json:"approval_category_id"`
+	ResolutionMode     string  `json:"resolution_mode"`
+	MinFinalLevel      *string `json:"min_final_level"`
+	MaxFinalLevel      *string `json:"max_final_level"`
+	FinalLevel         string  `json:"final_level" binding:"required"`
+	FlowMode           string  `json:"flow_mode"`
+	IsActive           *bool   `json:"is_active"`
 }
 
 var validApprovalMatrixOriginatorLevels = map[string]bool{
@@ -83,10 +92,13 @@ func (h *Handler) ListApprovalMatrices(c *gin.Context) {
 
 	query := `
 		SELECT am.id::text, am.letter_type_id::text, lt.code, lt.name,
-		       am.originator_level, am.final_level, am.flow_mode, am.is_active,
+		       am.originator_level, am.approval_category_id::text, ac.name,
+		       am.resolution_mode, am.min_final_level, am.max_final_level,
+		       am.final_level, am.flow_mode, am.is_active,
 		       am.created_at, am.updated_at
 		FROM approval_matrices am
 		JOIN letter_types lt ON lt.id = am.letter_type_id` +
+		` LEFT JOIN approval_categories ac ON ac.id=am.approval_category_id` +
 		whereSQL + `
 		ORDER BY lt.code,
 		         CASE WHEN am.originator_level IS NULL THEN 0 ELSE 1 END,
@@ -110,6 +122,11 @@ func (h *Handler) ListApprovalMatrices(c *gin.Context) {
 			&matrix.LetterTypeCode,
 			&matrix.LetterTypeName,
 			&matrix.OriginatorLevel,
+			&matrix.ApprovalCategoryID,
+			&matrix.ApprovalCategoryName,
+			&matrix.ResolutionMode,
+			&matrix.MinFinalLevel,
+			&matrix.MaxFinalLevel,
 			&matrix.FinalLevel,
 			&matrix.FlowMode,
 			&matrix.IsActive,
@@ -156,7 +173,7 @@ func (h *Handler) CreateApprovalMatrix(c *gin.Context) {
 		isActive = *req.IsActive
 	}
 	if isActive {
-		duplicate, err := h.activeApprovalMatrixRuleExists(ctx, req.LetterTypeID, req.OriginatorLevel, nil)
+		duplicate, err := h.activeApprovalMatrixRuleExists(ctx, req.LetterTypeID, req.OriginatorLevel, req.ApprovalCategoryID, nil)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa duplikasi matrix approval"})
 			return
@@ -170,10 +187,12 @@ func (h *Handler) CreateApprovalMatrix(c *gin.Context) {
 	var id string
 	err = h.DB.QueryRow(ctx, `
 		INSERT INTO approval_matrices
-			(letter_type_id, originator_level, final_level, flow_mode, extra_steps, is_active)
-		VALUES ($1, $2, $3, 'serial', '[]'::jsonb, $4)
+			(letter_type_id, originator_level, approval_category_id, resolution_mode,
+			 min_final_level, max_final_level, final_level, flow_mode, extra_steps, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'serial', '[]'::jsonb, $8)
 		RETURNING id::text`,
-		req.LetterTypeID, req.OriginatorLevel, req.FinalLevel, isActive).Scan(&id)
+		req.LetterTypeID, req.OriginatorLevel, req.ApprovalCategoryID, req.ResolutionMode,
+		req.MinFinalLevel, req.MaxFinalLevel, req.FinalLevel, isActive).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "gagal membuat matrix approval (aturan aktif untuk jenis surat dan originator ini mungkin sudah ada)"})
 		return
@@ -218,7 +237,7 @@ func (h *Handler) UpdateApprovalMatrix(c *gin.Context) {
 		isActive = *req.IsActive
 	}
 	if isActive {
-		duplicate, err := h.activeApprovalMatrixRuleExists(ctx, req.LetterTypeID, req.OriginatorLevel, &id)
+		duplicate, err := h.activeApprovalMatrixRuleExists(ctx, req.LetterTypeID, req.OriginatorLevel, req.ApprovalCategoryID, &id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa duplikasi matrix approval"})
 			return
@@ -233,13 +252,15 @@ func (h *Handler) UpdateApprovalMatrix(c *gin.Context) {
 		UPDATE approval_matrices
 		SET letter_type_id = $2,
 		    originator_level = $3,
-		    final_level = $4,
+		    approval_category_id = $4, resolution_mode=$5,
+		    min_final_level=$6, max_final_level=$7, final_level = $8,
 		    flow_mode = 'serial',
 		    extra_steps = '[]'::jsonb,
-		    is_active = $5,
+		    is_active = $9,
 		    updated_at = now()
 		WHERE id = $1`,
-		id, req.LetterTypeID, req.OriginatorLevel, req.FinalLevel, isActive)
+		id, req.LetterTypeID, req.OriginatorLevel, req.ApprovalCategoryID, req.ResolutionMode,
+		req.MinFinalLevel, req.MaxFinalLevel, req.FinalLevel, isActive)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "gagal memperbarui matrix approval (aturan aktif untuk jenis surat dan originator ini mungkin sudah ada)"})
 		return
@@ -279,6 +300,10 @@ func normalizeApprovalMatrixRequest(req *approvalMatrixRequest) error {
 	req.LetterTypeID = strings.TrimSpace(req.LetterTypeID)
 	req.FinalLevel = strings.ToLower(strings.TrimSpace(req.FinalLevel))
 	req.FlowMode = strings.ToLower(strings.TrimSpace(req.FlowMode))
+	req.ResolutionMode = strings.ToLower(strings.TrimSpace(req.ResolutionMode))
+	if req.ResolutionMode == "" {
+		req.ResolutionMode = "fixed"
+	}
 	if req.FlowMode == "" {
 		req.FlowMode = "serial"
 	}
@@ -297,8 +322,37 @@ func normalizeApprovalMatrixRequest(req *approvalMatrixRequest) error {
 			req.OriginatorLevel = &originatorLevel
 		}
 	}
+	if req.ApprovalCategoryID != nil {
+		value := strings.TrimSpace(*req.ApprovalCategoryID)
+		if value == "" {
+			req.ApprovalCategoryID = nil
+		} else {
+			req.ApprovalCategoryID = &value
+		}
+	}
+	for _, level := range []*string{req.MinFinalLevel, req.MaxFinalLevel} {
+		if level != nil {
+			*level = strings.ToLower(strings.TrimSpace(*level))
+		}
+	}
 	if !validApprovalMatrixFinalLevels[req.FinalLevel] {
 		return errors.New("final approval tidak valid")
+	}
+	if req.ResolutionMode != "fixed" && req.ResolutionMode != "user_selected" && req.ResolutionMode != "scope_derived" {
+		return errors.New("mode resolusi approval tidak valid")
+	}
+	for _, level := range []*string{req.MinFinalLevel, req.MaxFinalLevel} {
+		if level != nil && !validApprovalMatrixFinalLevels[*level] {
+			return errors.New("batas level approval tidak valid")
+		}
+	}
+	if req.ResolutionMode == "user_selected" {
+		if req.ApprovalCategoryID == nil || req.MinFinalLevel == nil || req.MaxFinalLevel == nil {
+			return errors.New("kategori serta batas minimum dan maksimum wajib untuk mode pilihan pengguna")
+		}
+		if approvalLevelRank[*req.MinFinalLevel] > approvalLevelRank[*req.MaxFinalLevel] {
+			return errors.New("batas minimum tidak boleh lebih tinggi dari batas maksimum")
+		}
 	}
 	if req.FlowMode != "serial" {
 		return errors.New("mode approval parallel belum didukung; gunakan serial")
@@ -312,7 +366,7 @@ func (h *Handler) letterTypeExists(ctx context.Context, letterTypeID string) (bo
 	return exists, err
 }
 
-func (h *Handler) activeApprovalMatrixRuleExists(ctx context.Context, letterTypeID string, originatorLevel *string, exceptID *string) (bool, error) {
+func (h *Handler) activeApprovalMatrixRuleExists(ctx context.Context, letterTypeID string, originatorLevel, categoryID *string, exceptID *string) (bool, error) {
 	args := []any{letterTypeID}
 	query := `
 		SELECT EXISTS (
@@ -325,6 +379,12 @@ func (h *Handler) activeApprovalMatrixRuleExists(ctx context.Context, letterType
 	} else {
 		args = append(args, *originatorLevel)
 		query += ` AND originator_level = $2`
+	}
+	if categoryID == nil {
+		query += ` AND approval_category_id IS NULL`
+	} else {
+		args = append(args, *categoryID)
+		query += ` AND approval_category_id = $` + strconv.Itoa(len(args))
 	}
 	if exceptID != nil {
 		args = append(args, *exceptID)

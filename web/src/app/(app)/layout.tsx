@@ -11,6 +11,7 @@ const PAGE_TITLES: { prefix: string; title: string }[] = [
   { prefix: "/inbox", title: "Surat Masuk" },
   { prefix: "/compose", title: "Tulis Surat" },
   { prefix: "/approvals", title: "Approval" },
+  { prefix: "/delegations", title: "Delegasi Wewenang" },
   { prefix: "/organization", title: "Organisasi" },
   { prefix: "/companies", title: "Perusahaan" },
   { prefix: "/users", title: "Pengguna" },

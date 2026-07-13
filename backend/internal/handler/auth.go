@@ -181,6 +181,21 @@ func (h *Handler) Me(c *gin.Context) {
 	}
 
 	roles, _ := h.userRoles(ctx, userID)
+	isSuperAdmin, err := h.userIsSuperAdmin(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses administrator"})
+		return
+	}
+	accessibleCompanies, err := h.accessibleCompanies(ctx, userID, false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat akses perusahaan"})
+		return
+	}
+	companyRoles, err := h.companyRoles(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memuat role perusahaan"})
+		return
+	}
 	canApprove, err := h.userHasPendingApproval(ctx, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa otoritas approval"})
@@ -236,6 +251,11 @@ func (h *Handler) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"id": userID, "nik": nik, "email": email, "full_name": fullName,
 		"status": status, "roles": roles, "positions": positions,
-		"capabilities": gin.H{"can_approve": canApprove, "can_export_audit": canExportAudit},
+		"accessible_companies": accessibleCompanies,
+		"company_roles":        companyRoles,
+		"capabilities": gin.H{
+			"can_approve": canApprove, "can_export_audit": canExportAudit,
+			"is_super_admin": isSuperAdmin,
+		},
 	})
 }

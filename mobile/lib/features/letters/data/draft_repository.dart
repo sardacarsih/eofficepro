@@ -35,6 +35,9 @@ class DraftRepository {
         DraftPosition.fromJson,
       );
       final orgUnitsFuture = _loadOrgUnits();
+      final categoriesFuture = _loadApprovalCategories().onError(
+        (error, stackTrace) => const <ApprovalCategory>[],
+      );
 
       final results = await Future.wait<Object>([
         companiesFuture,
@@ -42,6 +45,7 @@ class DraftRepository {
         templatesFuture,
         positionsFuture,
         orgUnitsFuture,
+        categoriesFuture,
       ]);
       return DraftComposerBootstrap(
         companies: results[0] as List<DraftCompany>,
@@ -49,6 +53,7 @@ class DraftRepository {
         templates: results[2] as List<DraftLetterTemplate>,
         positions: results[3] as List<DraftPosition>,
         orgUnits: results[4] as List<DraftOrgUnit>,
+        approvalCategories: results[5] as List<ApprovalCategory>,
       );
     } catch (error) {
       throw mapDioException(error, 'Gagal memuat data penulisan surat');
@@ -251,6 +256,37 @@ class DraftRepository {
       appendUnit(root);
     }
     return units;
+  }
+
+  Future<List<ApprovalCategory>> _loadApprovalCategories() async {
+    final response =
+        await _dio.get<Map<String, dynamic>>('/approval-categories');
+    return (response.data?['data'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(ApprovalCategory.fromJson)
+        .toList();
+  }
+
+  Future<ApprovalRoutePreview> previewApprovalRoute({
+    required String letterTypeId,
+    required String creatorPositionId,
+    required List<DraftRecipient> recipients,
+    String? approvalCategoryId,
+    String? requestedFinalLevel,
+  }) async {
+    try {
+      final response = await _dio
+          .post<Map<String, dynamic>>('/approval-routes/preview', data: {
+        'letter_type_id': letterTypeId,
+        'creator_position_id': creatorPositionId,
+        'approval_category_id': approvalCategoryId,
+        'requested_final_level': requestedFinalLevel,
+        'recipients': recipients.map((item) => item.toJson()).toList(),
+      });
+      return ApprovalRoutePreview.fromJson(response.data ?? const {});
+    } catch (error) {
+      throw mapDioException(error, 'Gagal memuat rute persetujuan');
+    }
   }
 }
 

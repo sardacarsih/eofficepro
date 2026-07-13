@@ -94,6 +94,7 @@ class DraftComposerBootstrap {
     required this.templates,
     required this.positions,
     required this.orgUnits,
+    this.approvalCategories = const [],
   });
 
   final List<DraftCompany> companies;
@@ -101,6 +102,47 @@ class DraftComposerBootstrap {
   final List<DraftLetterTemplate> templates;
   final List<DraftPosition> positions;
   final List<DraftOrgUnit> orgUnits;
+  final List<ApprovalCategory> approvalCategories;
+}
+
+class ApprovalCategory {
+  const ApprovalCategory(
+      {required this.id, required this.code, required this.name});
+  final String id;
+  final String code;
+  final String name;
+  factory ApprovalCategory.fromJson(Map<String, dynamic> json) =>
+      ApprovalCategory(
+          id: json['id'] as String? ?? '',
+          code: json['code'] as String? ?? '',
+          name: json['name'] as String? ?? '');
+}
+
+class ApprovalRoutePreview {
+  const ApprovalRoutePreview(
+      {required this.resolutionMode,
+      required this.finalLevel,
+      required this.allowedLevels,
+      required this.steps,
+      this.coordinationScope});
+  final String resolutionMode;
+  final String finalLevel;
+  final String? coordinationScope;
+  final List<String> allowedLevels;
+  final List<String> steps;
+  factory ApprovalRoutePreview.fromJson(Map<String, dynamic> json) =>
+      ApprovalRoutePreview(
+          resolutionMode: json['resolution_mode'] as String? ?? '',
+          finalLevel: json['final_level'] as String? ?? '',
+          coordinationScope: json['coordination_scope'] as String?,
+          allowedLevels: (json['allowed_levels'] as List<dynamic>? ?? const [])
+              .whereType<String>()
+              .toList(),
+          steps: (json['steps'] as List<dynamic>? ?? const [])
+              .whereType<Map<String, dynamic>>()
+              .map((item) => item['title'] as String? ?? '')
+              .where((item) => item.isNotEmpty)
+              .toList());
 }
 
 class DraftCompany {
@@ -351,6 +393,10 @@ class DraftLetter {
     this.onBehalfOfPositionId,
     this.onBehalfOfTitle,
     this.templateId,
+    this.approvalCategoryId,
+    this.requestedFinalLevel,
+    this.resolvedFinalLevel,
+    this.coordinationScope,
   });
 
   final String id;
@@ -370,6 +416,10 @@ class DraftLetter {
   final String? onBehalfOfPositionId;
   final String? onBehalfOfTitle;
   final String? templateId;
+  final String? approvalCategoryId;
+  final String? requestedFinalLevel;
+  final String? resolvedFinalLevel;
+  final String? coordinationScope;
   final int version;
   final String bodyHtml;
   final String bodyPlain;
@@ -398,6 +448,10 @@ class DraftLetter {
       onBehalfOfPositionId: json['on_behalf_of_position_id'] as String?,
       onBehalfOfTitle: json['on_behalf_of_title'] as String?,
       templateId: json['template_id'] as String?,
+      approvalCategoryId: json['approval_category_id'] as String?,
+      requestedFinalLevel: json['requested_final_level'] as String?,
+      resolvedFinalLevel: json['resolved_final_level'] as String?,
+      coordinationScope: json['coordination_scope'] as String?,
       version: _asInt(json['version']),
       bodyHtml: json['body_html'] as String? ?? '',
       bodyPlain: json['body_plain'] as String? ?? '',
@@ -424,6 +478,8 @@ class DraftLetterPayload {
     this.classification,
     this.templateId,
     this.baseVersion,
+    this.approvalCategoryId,
+    this.requestedFinalLevel,
   });
 
   final String companyId;
@@ -434,6 +490,8 @@ class DraftLetterPayload {
   final LetterClassification? classification;
   final String? templateId;
   final int? baseVersion;
+  final String? approvalCategoryId;
+  final String? requestedFinalLevel;
   final LetterPriority priority;
   final String bodyHtml;
   final List<DraftRecipient> recipients;
@@ -446,6 +504,10 @@ class DraftLetterPayload {
       'on_behalf_of_position_id': onBehalfOfPositionId,
       if (templateId case final value?) 'template_id': value,
       if (baseVersion != null) 'base_version': baseVersion,
+      if (approvalCategoryId != null)
+        'approval_category_id': approvalCategoryId,
+      if (requestedFinalLevel != null)
+        'requested_final_level': requestedFinalLevel,
       'subject': subject,
       if (classification case final value?) 'classification': value.wireValue,
       'priority': priority.wireValue,

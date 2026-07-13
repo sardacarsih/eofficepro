@@ -4,20 +4,29 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ApiError,
+  cancelLetter,
   createDisposition,
+  createLetterComment,
 	  downloadAuthenticatedFile,
   getLetterDetail,
+  listLetterComments,
   listLetterDispositions,
   listAllPositions,
   type DispositionItem,
   type DispositionRecipient,
   type DispositionStatus,
   type LetterApprovalAction,
+  type LetterComment,
   type LetterDetail,
   type LetterApprovalStep,
+  type PageMeta,
   type Position,
 } from "@/lib/api";
+import Pagination from "@/components/Pagination";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
+
+const COMMENT_MAX_LENGTH = 2000;
+const CANCEL_REASON_MAX_LENGTH = 1000;
 
 const STATUS_LABEL: Record<LetterDetail["status"], string> = {
   draft: "Draft",
@@ -145,6 +154,17 @@ export default function LetterDetailPage() {
   );
   const [dispositionError, setDispositionError] = useState<string | null>(null);
   const [dispositionSuccess, setDispositionSuccess] = useState<string | null>(null);
+  const [comments, setComments] = useState<LetterComment[]>([]);
+  const [commentsMeta, setCommentsMeta] = useState<PageMeta | null>(null);
+  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [commentBody, setCommentBody] = useState("");
+  const [postingComment, setPostingComment] = useState(false);
+  const [commentSubmitError, setCommentSubmitError] = useState<string | null>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const myPositions = useMemo(() => me?.positions ?? [], [me]);
   const selectedFromPositionID =
@@ -158,6 +178,25 @@ export default function LetterDetailPage() {
     const data = await listLetterDispositions(params.id, { pageSize: 100 });
     setDispositions(data.data);
   }, [params.id]);
+
+  const loadComments = useCallback(
+    async (page: number) => {
+      setCommentsLoading(true);
+      setCommentsError(null);
+      try {
+        const data = await listLetterComments(params.id, { page });
+        setComments(data.data);
+        setCommentsMeta(data.meta);
+      } catch (err) {
+        setCommentsError(
+          err instanceof Error ? err.message : "Gagal memuat komentar",
+        );
+      } finally {
+        setCommentsLoading(false);
+      }
+    },
+    [params.id],
+  );
 
   useEffect(() => {
     let active = true;
@@ -201,6 +240,7 @@ export default function LetterDetailPage() {
       .then((letterData) => {
         if (!active) return;
         setLetter(letterData.letter);
+        void loadComments(1);
         if (letterData.letter.status === "published") {
           void loadPublishedDispositionData();
         }
@@ -215,7 +255,7 @@ export default function LetterDetailPage() {
     return () => {
       active = false;
     };
-  }, [params.id]);
+  }, [params.id, loadComments]);
 
   const actionsByStepID = useMemo(() => {
     const byStepID = new Map<string, LetterApprovalAction[]>();
@@ -307,6 +347,70 @@ export default function LetterDetailPage() {
     }
   }
 
+  async function handleCancelLetter(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reason = cancelReason.trim();
+    if (!reason) {
+      setCancelError("Alasan pembatalan wajib diisi.");
+      return;
+    }
+    // Hitung per code point agar konsisten dengan validasi rune di server.
+    if (Array.from(reason).length > CANCEL_REASON_MAX_LENGTH) {
+      setCancelError(`Alasan maksimal ${CANCEL_REASON_MAX_LENGTH} karakter.`);
+      return;
+    }
+
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await cancelLetter(params.id, reason);
+      // Refresh detail: banner jejak dan hilangnya tombol datang dari server.
+      const data = await getLetterDetail(params.id);
+      setLetter(data.letter);
+      setCancelDialogOpen(false);
+      setCancelReason("");
+    } catch (err) {
+      setCancelError(
+        err instanceof Error ? err.message : "Gagal membatalkan surat",
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function handleCreateComment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const body = commentBody.trim();
+    if (!body) {
+      setCommentSubmitError("Komentar wajib diisi.");
+      return;
+    }
+    // Hitung per code point agar konsisten dengan validasi rune di server.
+    if (Array.from(body).length > COMMENT_MAX_LENGTH) {
+      setCommentSubmitError(
+        `Komentar maksimal ${COMMENT_MAX_LENGTH} karakter.`,
+      );
+      return;
+    }
+
+    setPostingComment(true);
+    setCommentSubmitError(null);
+    try {
+      await createLetterComment(params.id, body);
+      setCommentBody("");
+      // Komentar terurut kronologis: komentar baru ada di halaman terakhir.
+      const total = (commentsMeta?.total ?? comments.length) + 1;
+      const pageSize = commentsMeta?.page_size ?? 20;
+      await loadComments(Math.max(1, Math.ceil(total / pageSize)));
+    } catch (err) {
+      setCommentSubmitError(
+        err instanceof Error ? err.message : "Gagal mengirim komentar",
+      );
+    } finally {
+      setPostingComment(false);
+    }
+  }
+
   return (
     <main className="mx-auto grid w-full max-w-7xl flex-1 gap-6 px-6 py-8 lg:grid-cols-[1fr_380px]">
       {loading && <p className="text-sm text-zinc-500">Memuat detail surat...</p>}
@@ -341,6 +445,29 @@ export default function LetterDetailPage() {
               <p className="mt-2 font-mono text-sm text-navy-600 dark:text-sky-400">
                 {letter.letter_number ?? "Nomor belum terbit"}
               </p>
+              {letter.cancelled_at && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+                  <p className="font-semibold">
+                    Dibatalkan oleh {letter.cancelled_by_name ?? "pembuat"}
+                    {letter.cancel_reason ? `: ${letter.cancel_reason}` : ""}
+                  </p>
+                  <p className="mt-1 text-xs">
+                    Dibatalkan pada {formatDate(letter.cancelled_at)}
+                  </p>
+                </div>
+              )}
+              {letter.can_cancel && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCancelDialogOpen(true);
+                    setCancelError(null);
+                  }}
+                  className="mt-3 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+                >
+                  Batalkan Surat
+                </button>
+              )}
             </div>
 
             <div className="grid gap-5 px-6 py-5">
@@ -366,6 +493,14 @@ export default function LetterDetailPage() {
                     {letter.company_name}
                   </p>
                 </div>
+                {(letter.approval_category_name || letter.coordination_scope) && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Kebijakan Approval</p>
+                    <p className="mt-1 text-zinc-900 dark:text-zinc-100">
+                      {letter.approval_category_name ?? letter.coordination_scope?.replaceAll("_", " ")} · {letter.resolved_final_level?.replaceAll("_", " ")}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                     Dibuat
@@ -805,6 +940,11 @@ export default function LetterDetailPage() {
                         <p className="font-semibold text-zinc-800 dark:text-zinc-200">
                           {ACTION_LABEL[action.action]} oleh {action.actor_name}
                         </p>
+                        {action.on_behalf_of && (
+                          <p className="mt-0.5 font-semibold text-cyan-700 dark:text-cyan-300">
+                            a.n. {action.on_behalf_of_position_title ?? step.position_title}
+                          </p>
+                        )}
                         <p className="mt-1 text-zinc-500">
                           {formatDate(action.created_at)}
                           {action.note ? ` · ${action.note}` : ""}
@@ -815,7 +955,190 @@ export default function LetterDetailPage() {
                 ))}
               </div>
             </section>
+
+            <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+                  Komentar
+                </h2>
+                {commentsMeta && (
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                    {commentsMeta.total}
+                  </span>
+                )}
+              </div>
+
+              {commentsLoading && (
+                <p className="text-sm text-zinc-500">Memuat komentar...</p>
+              )}
+
+              {!commentsLoading && commentsError && (
+                <div
+                  role="alert"
+                  className="mb-3 grid gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+                >
+                  <p>{commentsError}</p>
+                  <button
+                    type="button"
+                    onClick={() => void loadComments(commentsMeta?.page ?? 1)}
+                    className="justify-self-start rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
+                  >
+                    Coba lagi
+                  </button>
+                </div>
+              )}
+
+              {!commentsLoading && !commentsError && (
+                <div className="grid gap-3">
+                  {comments.length === 0 && (
+                    <p className="rounded-lg border border-dashed border-zinc-300 px-3 py-5 text-center text-sm text-zinc-500 dark:border-zinc-700">
+                      Belum ada komentar.
+                    </p>
+                  )}
+                  {comments.map((comment) => (
+                    <div
+                      key={comment.id}
+                      className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                          {comment.user_name}
+                        </p>
+                        <span className="text-xs text-zinc-500">
+                          {formatDate(comment.created_at)}
+                        </span>
+                      </div>
+                      {comment.position_title && (
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {comment.position_title}
+                        </p>
+                      )}
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+                        {comment.body}
+                      </p>
+                    </div>
+                  ))}
+                  <Pagination
+                    page={commentsMeta?.page ?? 1}
+                    totalPages={commentsMeta?.total_pages ?? 1}
+                    onPageChange={(page) => void loadComments(page)}
+                    disabled={commentsLoading || postingComment}
+                  />
+                </div>
+              )}
+
+              <form onSubmit={handleCreateComment} className="mt-4 grid gap-2">
+                {commentSubmitError && (
+                  <p
+                    role="alert"
+                    className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+                  >
+                    {commentSubmitError}
+                  </p>
+                )}
+                <label className="grid gap-1 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  Tambah komentar
+                  <textarea
+                    value={commentBody}
+                    onChange={(event) => setCommentBody(event.target.value)}
+                    disabled={postingComment}
+                    rows={3}
+                    maxLength={COMMENT_MAX_LENGTH}
+                    placeholder="Tulis komentar internal"
+                    className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:disabled:bg-zinc-900"
+                  />
+                </label>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-zinc-500">
+                    {Array.from(commentBody).length}/{COMMENT_MAX_LENGTH}
+                  </span>
+                  <button
+                    type="submit"
+                    disabled={postingComment}
+                    className="rounded-lg bg-navy-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-sky-500 dark:text-navy-950 dark:hover:bg-sky-400"
+                  >
+                    {postingComment ? "Mengirim..." : "Kirim Komentar"}
+                  </button>
+                </div>
+              </form>
+            </section>
           </aside>
+
+          {cancelDialogOpen && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="letter-cancel-title"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/45 px-4 py-6"
+            >
+              <form
+                onSubmit={handleCancelLetter}
+                className="w-full max-w-md rounded-xl bg-white shadow-2xl dark:bg-zinc-900"
+              >
+                <header className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+                  <h2
+                    id="letter-cancel-title"
+                    className="text-lg font-semibold text-zinc-950 dark:text-zinc-50"
+                  >
+                    Batalkan Surat
+                  </h2>
+                  <p className="mt-1 text-sm text-zinc-500">{letter.subject}</p>
+                </header>
+
+                <div className="grid gap-3 px-5 py-5">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                    Surat yang dibatalkan tidak menerima nomor dan approval yang
+                    masih menunggu akan dilewati. Tindakan ini tidak dapat
+                    diurungkan.
+                  </p>
+                  <label className="grid gap-1 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                    Alasan pembatalan
+                    <textarea
+                      value={cancelReason}
+                      onChange={(event) => setCancelReason(event.target.value)}
+                      disabled={cancelling}
+                      required
+                      rows={3}
+                      maxLength={CANCEL_REASON_MAX_LENGTH}
+                      placeholder="Tuliskan alasan pembatalan"
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:disabled:bg-zinc-900"
+                    />
+                    <span className="text-xs font-normal text-zinc-500">
+                      {Array.from(cancelReason).length}/{CANCEL_REASON_MAX_LENGTH}
+                    </span>
+                  </label>
+                  {cancelError && (
+                    <p
+                      role="alert"
+                      className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+                    >
+                      {cancelError}
+                    </p>
+                  )}
+                </div>
+
+                <footer className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!cancelling) setCancelDialogOpen(false);
+                    }}
+                    disabled={cancelling}
+                    className="h-10 rounded-lg border border-zinc-300 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={cancelling}
+                    className="h-10 rounded-lg bg-red-700 px-4 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                  >
+                    {cancelling ? "Membatalkan..." : "Batalkan Surat"}
+                  </button>
+                </footer>
+              </form>
+            </div>
+          )}
         </>
       )}
     </main>

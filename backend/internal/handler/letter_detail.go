@@ -13,32 +13,41 @@ import (
 )
 
 type LetterDetail struct {
-	ID                   string                 `json:"id"`
-	CompanyCode          string                 `json:"company_code"`
-	CompanyName          string                 `json:"company_name"`
-	LetterTypeCode       string                 `json:"letter_type_code"`
-	LetterTypeName       string                 `json:"letter_type_name"`
-	LetterNumber         *string                `json:"letter_number"`
-	Subject              string                 `json:"subject"`
-	Classification       string                 `json:"classification"`
-	Priority             string                 `json:"priority"`
-	Status               string                 `json:"status"`
-	CreatorName          string                 `json:"creator_name"`
-	CreatorPositionTitle string                 `json:"creator_position_title"`
-	OnBehalfOfTitle      *string                `json:"on_behalf_of_title"`
-	Version              int                    `json:"version"`
-	BodyHTML             string                 `json:"body_html"`
-	BodyPlain            string                 `json:"body_plain"`
-	QRToken              *string                `json:"qr_token"`
-	VerifyURL            *string                `json:"verify_url"`
-	FinalPDFURL          *string                `json:"final_pdf_url"`
-	Recipients           []DraftRecipient       `json:"recipients"`
-	Attachments          []LetterAttachment     `json:"attachments"`
-	ApprovalSteps        []LetterApprovalStep   `json:"approval_steps"`
-	ApprovalActions      []LetterApprovalAction `json:"approval_actions"`
-	CreatedAt            time.Time              `json:"created_at"`
-	UpdatedAt            time.Time              `json:"updated_at"`
-	PublishedAt          *time.Time             `json:"published_at"`
+	ID                     string                 `json:"id"`
+	CompanyCode            string                 `json:"company_code"`
+	CompanyName            string                 `json:"company_name"`
+	LetterTypeCode         string                 `json:"letter_type_code"`
+	LetterTypeName         string                 `json:"letter_type_name"`
+	LetterNumber           *string                `json:"letter_number"`
+	Subject                string                 `json:"subject"`
+	Classification         string                 `json:"classification"`
+	Priority               string                 `json:"priority"`
+	Status                 string                 `json:"status"`
+	CreatorName            string                 `json:"creator_name"`
+	CreatorPositionTitle   string                 `json:"creator_position_title"`
+	OnBehalfOfTitle        *string                `json:"on_behalf_of_title"`
+	ApprovalCategoryName   *string                `json:"approval_category_name"`
+	RequestedFinalLevel    *string                `json:"requested_final_level"`
+	ResolvedFinalLevel     *string                `json:"resolved_final_level"`
+	CoordinationScope      *string                `json:"coordination_scope"`
+	ApprovalResolutionMode *string                `json:"approval_resolution_mode"`
+	Version                int                    `json:"version"`
+	BodyHTML               string                 `json:"body_html"`
+	BodyPlain              string                 `json:"body_plain"`
+	QRToken                *string                `json:"qr_token"`
+	VerifyURL              *string                `json:"verify_url"`
+	FinalPDFURL            *string                `json:"final_pdf_url"`
+	Recipients             []DraftRecipient       `json:"recipients"`
+	Attachments            []LetterAttachment     `json:"attachments"`
+	ApprovalSteps          []LetterApprovalStep   `json:"approval_steps"`
+	ApprovalActions        []LetterApprovalAction `json:"approval_actions"`
+	CreatedAt              time.Time              `json:"created_at"`
+	UpdatedAt              time.Time              `json:"updated_at"`
+	PublishedAt            *time.Time             `json:"published_at"`
+	CancelledAt            *time.Time             `json:"cancelled_at"`
+	CancelledByName        *string                `json:"cancelled_by_name"`
+	CancelReason           *string                `json:"cancel_reason"`
+	CanCancel              bool                   `json:"can_cancel"`
 }
 
 type LetterApprovalStep struct {
@@ -54,15 +63,17 @@ type LetterApprovalStep struct {
 }
 
 type LetterApprovalAction struct {
-	ID               string    `json:"id"`
-	StepID           string    `json:"step_id"`
-	Action           string    `json:"action"`
-	ActorName        string    `json:"actor_name"`
-	Note             *string   `json:"note"`
-	DeviceInfo       *string   `json:"device_info"`
-	CreatedAt        time.Time `json:"created_at"`
-	PositionTitle    string    `json:"position_title"`
-	SignaturePresent bool      `json:"signature_present"`
+	ID                      string    `json:"id"`
+	StepID                  string    `json:"step_id"`
+	Action                  string    `json:"action"`
+	ActorName               string    `json:"actor_name"`
+	Note                    *string   `json:"note"`
+	DeviceInfo              *string   `json:"device_info"`
+	CreatedAt               time.Time `json:"created_at"`
+	PositionTitle           string    `json:"position_title"`
+	SignaturePresent        bool      `json:"signature_present"`
+	OnBehalfOf              bool      `json:"on_behalf_of"`
+	OnBehalfOfPositionTitle *string   `json:"on_behalf_of_position_title"`
 }
 
 func (h *Handler) GetLetterDetail(c *gin.Context) {
@@ -89,15 +100,20 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 	err = h.DB.QueryRow(ctx, `
 		SELECT l.id::text, co.code, co.name, lt.code, lt.name, l.letter_number,
 		       l.subject, l.classification, l.priority, l.status,
-		       u.full_name, p.title, obp.title,
+		       u.full_name, p.title, obp.title, ac.name, l.requested_final_level,
+		       l.resolved_final_level, l.coordination_scope, l.approval_resolution_mode,
 		       COALESCE(v.version, 0), COALESCE(v.body_html, ''), COALESCE(v.body_plain, ''),
-		       l.qr_token, l.final_pdf_key, l.created_at, l.updated_at, l.published_at
+		       l.qr_token, l.final_pdf_key, l.created_at, l.updated_at, l.published_at,
+		       l.cancelled_at, cbu.full_name, l.cancel_reason,
+		       (l.creator_user_id = $2 AND l.status IN ('draft','revision','in_approval')) AS can_cancel
 		FROM letters l
 		JOIN companies co ON co.id = l.company_id
 		JOIN letter_types lt ON lt.id = l.letter_type_id
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
 		LEFT JOIN positions obp ON obp.id = l.on_behalf_of_position_id
+		LEFT JOIN approval_categories ac ON ac.id = l.approval_category_id
+		LEFT JOIN users cbu ON cbu.id = l.cancelled_by_user_id
 		LEFT JOIN LATERAL (
 			SELECT version, body_html, body_plain
 			FROM letter_versions
@@ -105,7 +121,7 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 			ORDER BY version DESC
 			LIMIT 1
 		) v ON true
-		WHERE l.id = $1`, letterID).Scan(
+		WHERE l.id = $1`, letterID, userID).Scan(
 		&detail.ID,
 		&detail.CompanyCode,
 		&detail.CompanyName,
@@ -119,6 +135,11 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		&detail.CreatorName,
 		&detail.CreatorPositionTitle,
 		&detail.OnBehalfOfTitle,
+		&detail.ApprovalCategoryName,
+		&detail.RequestedFinalLevel,
+		&detail.ResolvedFinalLevel,
+		&detail.CoordinationScope,
+		&detail.ApprovalResolutionMode,
 		&detail.Version,
 		&detail.BodyHTML,
 		&detail.BodyPlain,
@@ -127,6 +148,10 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		&detail.CreatedAt,
 		&detail.UpdatedAt,
 		&detail.PublishedAt,
+		&detail.CancelledAt,
+		&detail.CancelledByName,
+		&detail.CancelReason,
+		&detail.CanCancel,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "surat tidak ditemukan"})
@@ -183,6 +208,11 @@ func (h *Handler) userCanViewLetter(ctx context.Context, userID string, letterID
 			  AND up.user_id = $2
 			  AND current_date >= up.valid_from
 			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+		) OR EXISTS (
+			SELECT 1
+			FROM approval_steps sdg
+			WHERE sdg.letter_id = $1
+			  AND `+activeDelegationExistsSQL("sdg.approver_position_id", "$2")+`
 		) OR EXISTS (
 			SELECT 1
 			FROM letter_recipients lr
@@ -286,11 +316,15 @@ func (h *Handler) loadLetterApprovalActions(c *gin.Context, letterID string) ([]
 	rows, err := h.DB.Query(c.Request.Context(), `
 		SELECT aa.id::text, aa.approval_step_id::text, aa.action,
 		       u.full_name, aa.note, aa.device_info, aa.acted_at, p.title,
-		       aa.signature_image_key IS NOT NULL
+		       aa.signature_image_key IS NOT NULL,
+		       aa.on_behalf_delegation_id IS NOT NULL AS on_behalf_of,
+		       obdp.title AS on_behalf_of_position_title
 		FROM approval_actions aa
 		JOIN approval_steps s ON s.id = aa.approval_step_id
 		JOIN users u ON u.id = aa.acted_by_user_id
 		JOIN positions p ON p.id = s.approver_position_id
+		LEFT JOIN delegations obd ON obd.id = aa.on_behalf_delegation_id
+		LEFT JOIN positions obdp ON obdp.id = obd.delegator_position_id
 		WHERE s.letter_id = $1
 		ORDER BY aa.acted_at`, letterID)
 	if err != nil {
@@ -312,6 +346,8 @@ func (h *Handler) loadLetterApprovalActions(c *gin.Context, letterID string) ([]
 			&action.CreatedAt,
 			&action.PositionTitle,
 			&action.SignaturePresent,
+			&action.OnBehalfOf,
+			&action.OnBehalfOfPositionTitle,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca aksi approval"})
 			return nil, false

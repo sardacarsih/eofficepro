@@ -371,11 +371,13 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		return
 	}
 
-	route, err := h.resolveApprovalRoute(ctx, tx, draft.LetterTypeID, draft.CreatorPositionID)
+	policyPreview, err := h.resolvePolicyRoute(ctx, tx, draft.LetterTypeID, draft.CreatorPositionID,
+		draft.ApprovalCategoryID, draft.RequestedFinalLevel, recipients)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	route := approvalRoute{SLAHours: 24, Steps: policyPreview.Steps}
 	if err := validateApprovalRouteHasActiveHolders(ctx, tx, route); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -406,8 +408,12 @@ func (h *Handler) SubmitDraftLetter(c *gin.Context) {
 		    current_step_order = 1,
 		    route_snapshot = $2,
 		    qr_token = $3,
+		    resolved_final_level = $4,
+		    coordination_scope = NULLIF($5, ''),
+		    approval_resolution_mode = $6,
 		    updated_at = now()
-		WHERE id = $1`, letterID, routeJSON, qrToken); err != nil {
+		WHERE id = $1`, letterID, routeJSON, qrToken, policyPreview.FinalLevel,
+		policyPreview.Scope, policyPreview.ResolutionMode); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengajukan surat"})
 		return
 	}
@@ -567,7 +573,7 @@ func (h *Handler) loadDraftPreviewData(ctx context.Context, userID string, lette
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
 		LEFT JOIN LATERAL (
-			SELECT version, body_plain
+			SELECT version, body_html, body_plain
 			FROM letter_versions
 			WHERE letter_id = l.id
 			ORDER BY version DESC
@@ -656,7 +662,7 @@ func loadFinalLetterPDFData(ctx context.Context, tx pgx.Tx, letterID string) (dr
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions p ON p.id = l.creator_position_id
 		LEFT JOIN LATERAL (
-			SELECT version, body_plain
+			SELECT version, body_html, body_plain
 			FROM letter_versions
 			WHERE letter_id = l.id
 			ORDER BY version DESC
@@ -701,7 +707,7 @@ func (h *Handler) renderAndStoreFinalPDF(ctx context.Context, tx pgx.Tx, letterI
 		return "", errors.New("surat tidak ditemukan untuk PDF final")
 	}
 	if err != nil {
-		return "", errors.New("gagal memuat data PDF final")
+		return "", fmt.Errorf("gagal memuat data PDF final: %w", err)
 	}
 	data.LetterNumber = letterNumber
 	data.PublishedAt = &publishedAt
@@ -1203,7 +1209,12 @@ func writeApprovalSignaturesBlock(pdf *gofpdf.Fpdf, signatures []approvalPDFSign
 
 		pdf.SetXY(colX, imageY+18)
 		pdf.SetFont("Arial", "B", 8)
-		pdf.MultiCell(columnWidth, 4, strings.TrimSpace(signature.ActorName), "", "C", false)
+		actorName := strings.TrimSpace(signature.ActorName)
+		if signature.OnBehalf {
+			// Delegasi E03-5: delegate menandatangani "a.n." posisi delegator.
+			actorName = "a.n. " + actorName
+		}
+		pdf.MultiCell(columnWidth, 4, actorName, "", "C", false)
 		pdf.SetX(colX)
 		pdf.SetFont("Arial", "I", 7)
 		pdf.MultiCell(columnWidth, 4, signature.ActedAt.Format("02/01/2006 15:04 MST"), "", "C", false)

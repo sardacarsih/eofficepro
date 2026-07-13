@@ -199,6 +199,10 @@ func main() {
 	ensureUserPosition(ctx, db, deptApproverID, positions.DeptHeads["DEP-FA-R1"])
 	directorApproverID := ensureDevUser(ctx, db, "DIRFA001", getenv("DIRECTOR_FA_EMAIL", "director.fa@ksk.local"), "Director Approver Finance", password, nil)
 	ensureUserPosition(ctx, db, directorApproverID, positions.Directors["DIR-FA"])
+	vpApproverID := ensureDevUser(ctx, db, "VP001", getenv("VP_APPROVER_EMAIL", "vp.approver@ksk.local"), "Vice President Director Approver", password, nil)
+	ensureUserPosition(ctx, db, vpApproverID, positions.VPID)
+	presidentApproverID := ensureDevUser(ctx, db, "PD001", getenv("PRESIDENT_APPROVER_EMAIL", "president.approver@ksk.local"), "President Director Approver", password, nil)
+	ensureUserPosition(ctx, db, presidentApproverID, positions.PresidentID)
 	seedGMUsers(ctx, db, password, positions)
 	seedSecretaryUsers(ctx, db, password, positions)
 	removeLegacyDevSeed(ctx, db, companyID)
@@ -289,7 +293,7 @@ func ensureAdminUser(ctx context.Context, db *pgxpool.Pool, email string, passwo
 		WHERE nik = 'ADM001' OR email = $1
 		LIMIT 1`, email).Scan(&userID)
 	if err == nil {
-		ensureUserRoles(ctx, db, userID, []string{"admin", "creator"})
+		ensureUserRoles(ctx, db, userID, []string{"super_admin", "creator"})
 		return userID
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -306,7 +310,7 @@ func ensureAdminUser(ctx context.Context, db *pgxpool.Pool, email string, passwo
 		email, hash).Scan(&userID); err != nil {
 		log.Fatalf("insert admin: %v", err)
 	}
-	ensureUserRoles(ctx, db, userID, []string{"admin", "creator"})
+	ensureUserRoles(ctx, db, userID, []string{"super_admin", "creator"})
 	return userID
 }
 

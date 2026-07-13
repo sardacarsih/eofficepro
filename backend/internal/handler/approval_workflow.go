@@ -19,11 +19,13 @@ import (
 )
 
 type draftSubmitSnapshot struct {
-	ID                string
-	LetterTypeID      string
-	CreatorPositionID string
-	Status            string
-	BodyPlain         string
+	ID                  string
+	LetterTypeID        string
+	CreatorPositionID   string
+	ApprovalCategoryID  *string
+	RequestedFinalLevel *string
+	Status              string
+	BodyPlain           string
 }
 
 type approvalRoute struct {
@@ -59,6 +61,7 @@ func lockDraftForSubmit(ctx context.Context, tx pgx.Tx, letterID string, userID 
 	var draft draftSubmitSnapshot
 	err := tx.QueryRow(ctx, `
 		SELECT l.id::text, l.letter_type_id::text, l.creator_position_id::text,
+		       l.approval_category_id::text, l.requested_final_level,
 		       l.status, COALESCE(v.body_plain, '')
 		FROM letters l
 		LEFT JOIN LATERAL (
@@ -73,6 +76,8 @@ func lockDraftForSubmit(ctx context.Context, tx pgx.Tx, letterID string, userID 
 		&draft.ID,
 		&draft.LetterTypeID,
 		&draft.CreatorPositionID,
+		&draft.ApprovalCategoryID,
+		&draft.RequestedFinalLevel,
 		&draft.Status,
 		&draft.BodyPlain,
 	)
@@ -458,7 +463,7 @@ func validateApprovalRouteHasActiveHolders(ctx context.Context, tx pgx.Tx, route
 	return nil
 }
 
-func loadApprovalPosition(ctx context.Context, tx pgx.Tx, positionID string) (approvalPosition, error) {
+func loadApprovalPosition(ctx context.Context, tx policyQueryer, positionID string) (approvalPosition, error) {
 	var position approvalPosition
 	err := tx.QueryRow(ctx, `
 		SELECT id::text, title, position_type, reports_to::text
@@ -496,6 +501,16 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 		return
 	}
 
+	// Item tampil bila user pemegang langsung posisi step ATAU delegate aktif
+	// (E03-5). is_delegated hanya true bila akses murni lewat delegasi.
+	directHolderSQL := `EXISTS (
+		SELECT 1 FROM user_positions up
+		WHERE up.position_id = s.approver_position_id
+		  AND up.user_id = $1
+		  AND current_date >= up.valid_from
+		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+	)`
+	delegatedSQL := activeDelegationExistsSQL("s.approver_position_id", "$1")
 	inboxSQL := `
 		FROM approval_steps s
 		JOIN letters l ON l.id = s.letter_id
@@ -504,7 +519,6 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 		JOIN positions p ON p.id = s.approver_position_id
 		JOIN users u ON u.id = l.creator_user_id
 		JOIN positions cp ON cp.id = l.creator_position_id
-		JOIN user_positions up ON up.position_id = s.approver_position_id
 		LEFT JOIN LATERAL (
 			SELECT body_plain
 			FROM letter_versions
@@ -517,9 +531,7 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 			FROM letter_attachments
 			WHERE letter_id = l.id
 		) a ON true
-		WHERE up.user_id = $1
-		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+		WHERE (` + directHolderSQL + ` OR ` + delegatedSQL + `)
 		  AND s.status = 'waiting'
 		  AND l.status = 'in_approval'`
 
@@ -533,7 +545,8 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 		SELECT s.id::text, s.letter_id::text, s.step_order, s.status,
 		       l.subject, l.priority, l.classification, lt.code, co.code,
 		       p.title, u.full_name, cp.title, COALESCE(v.body_plain, ''),
-		       COALESCE(a.attachment_count, 0), l.updated_at `+
+		       COALESCE(a.attachment_count, 0), l.updated_at,
+		       NOT `+directHolderSQL+` AS is_delegated `+
 		inboxSQL+`
 		ORDER BY l.priority DESC, l.updated_at ASC
 		LIMIT $2 OFFSET $3`, userID, pageSize, offset)
@@ -544,21 +557,23 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 	defer rows.Close()
 
 	type approvalInboxItem struct {
-		StepID          string    `json:"step_id"`
-		LetterID        string    `json:"letter_id"`
-		StepOrder       int       `json:"step_order"`
-		Status          string    `json:"status"`
-		Subject         string    `json:"subject"`
-		Priority        string    `json:"priority"`
-		Classification  string    `json:"classification"`
-		LetterTypeCode  string    `json:"letter_type_code"`
-		CompanyCode     string    `json:"company_code"`
-		PositionTitle   string    `json:"position_title"`
-		CreatorName     string    `json:"creator_name"`
-		CreatorPosition string    `json:"creator_position"`
-		BodyPlain       string    `json:"body_plain"`
-		AttachmentCount int       `json:"attachment_count"`
-		UpdatedAt       time.Time `json:"updated_at"`
+		StepID             string    `json:"step_id"`
+		LetterID           string    `json:"letter_id"`
+		StepOrder          int       `json:"step_order"`
+		Status             string    `json:"status"`
+		Subject            string    `json:"subject"`
+		Priority           string    `json:"priority"`
+		Classification     string    `json:"classification"`
+		LetterTypeCode     string    `json:"letter_type_code"`
+		CompanyCode        string    `json:"company_code"`
+		PositionTitle      string    `json:"position_title"`
+		CreatorName        string    `json:"creator_name"`
+		CreatorPosition    string    `json:"creator_position"`
+		BodyPlain          string    `json:"body_plain"`
+		AttachmentCount    int       `json:"attachment_count"`
+		UpdatedAt          time.Time `json:"updated_at"`
+		IsDelegated        bool      `json:"is_delegated"`
+		DelegatedFromTitle *string   `json:"delegated_from_title"`
 	}
 	items := []approvalInboxItem{}
 	for rows.Next() {
@@ -579,9 +594,14 @@ func (h *Handler) ListApprovalInbox(c *gin.Context) {
 			&item.BodyPlain,
 			&item.AttachmentCount,
 			&item.UpdatedAt,
+			&item.IsDelegated,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca inbox approval"})
 			return
+		}
+		if item.IsDelegated {
+			title := item.PositionTitle
+			item.DelegatedFromTitle = &title
 		}
 		items = append(items, item)
 	}
@@ -628,20 +648,19 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
+	// Urutan lock wajib letters -> approval_steps agar konsisten dengan
+	// CancelLetter (E03-7), yang juga lock letter dulu baru men-skip step.
+	// FOR UPDATE OF s, l dalam satu statement tidak menjamin urutan itu
+	// (planner umumnya lock s dulu) sehingga rawan deadlock AB-BA; karena itu
+	// letter dikunci lebih dulu dalam statement terpisah. letter_id pada step
+	// immutable, aman dibaca tanpa lock.
 	var letterID string
-	var stepOrder int
 	err = tx.QueryRow(ctx, `
-		SELECT s.letter_id::text, s.step_order
-		FROM approval_steps s
-		JOIN user_positions up ON up.position_id = s.approver_position_id
-		JOIN letters l ON l.id = s.letter_id
-		WHERE s.id = $1
-		  AND up.user_id = $2
-		  AND current_date >= up.valid_from
-		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
-		  AND s.status = 'waiting'
+		SELECT l.id::text
+		FROM letters l
+		WHERE l.id = (SELECT letter_id FROM approval_steps WHERE id = $1)
 		  AND l.status = 'in_approval'
-		FOR UPDATE OF s`, stepID, userID).Scan(&letterID, &stepOrder)
+		FOR UPDATE`, stepID).Scan(&letterID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "approval step tidak ditemukan atau bukan giliran pengguna ini"})
 		return
@@ -649,6 +668,48 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca approval step"})
 		return
+	}
+
+	// Delegasi aktif (E03-5) memberi hak aksi "a.n."; kapasitas langsung menang
+	// (delegation_id NULL bila user juga pemegang langsung posisi step).
+	var stepOrder int
+	var isDirectHolder bool
+	var actingDelegationID *string
+	directHolderSQL := `EXISTS (
+		SELECT 1 FROM user_positions up
+		WHERE up.position_id = s.approver_position_id
+		  AND up.user_id = $2
+		  AND current_date >= up.valid_from
+		  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+	)`
+	err = tx.QueryRow(ctx, `
+		SELECT s.step_order, `+directHolderSQL+`, dgact.delegation_id
+		FROM approval_steps s
+		LEFT JOIN LATERAL (
+			SELECT dg.id::text AS delegation_id
+			FROM delegations dg
+			WHERE dg.delegator_position_id = s.approver_position_id
+			  AND dg.delegate_user_id = $2
+			  AND now() >= dg.valid_from AND now() < dg.valid_to
+			  AND dg.revoked_at IS NULL
+			ORDER BY dg.valid_from DESC
+			LIMIT 1
+		) dgact ON true
+		WHERE s.id = $1
+		  AND s.status = 'waiting'
+		  AND (`+directHolderSQL+` OR dgact.delegation_id IS NOT NULL)
+		FOR UPDATE OF s`, stepID, userID).Scan(&stepOrder, &isDirectHolder, &actingDelegationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "approval step tidak ditemukan atau bukan giliran pengguna ini"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal membaca approval step"})
+		return
+	}
+	if isDirectHolder {
+		// Kapasitas langsung menang: aksi tercatat sebagai diri sendiri.
+		actingDelegationID = nil
 	}
 
 	clientActionID := strings.TrimSpace(req.ClientActionID)
@@ -680,14 +741,19 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 		signatureChecksumArg = signature.ChecksumSHA256
 	}
 
+	var onBehalfDelegationArg any
+	if actingDelegationID != nil {
+		onBehalfDelegationArg = *actingDelegationID
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO approval_actions
-			(approval_step_id, action, acted_by_user_id, note, client_action_id, device_info, ip_address,
+			(approval_step_id, action, acted_by_user_id, on_behalf_delegation_id, note, client_action_id, device_info, ip_address,
 			 signature_image_key, signature_mime_type, signature_size_bytes, signature_checksum_sha256)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		stepID,
 		req.Action,
 		userID,
+		onBehalfDelegationArg,
 		nullableString(req.Note),
 		clientActionArg,
 		nullableString(req.DeviceInfo),
@@ -788,10 +854,14 @@ func (h *Handler) ActApprovalStep(c *gin.Context) {
 	}
 	signatureCommitted = true
 
-	h.audit(ctx, "letter", &letterID, "approval_"+req.Action, &userID, map[string]any{
+	auditDetail := map[string]any{
 		"step_id": stepID,
 		"status":  letterStatus,
-	}, c.ClientIP())
+	}
+	if actingDelegationID != nil {
+		auditDetail["on_behalf_delegation_id"] = *actingDelegationID
+	}
+	h.audit(ctx, "letter", &letterID, "approval_"+req.Action, &userID, auditDetail, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"letter_id": letterID, "status": letterStatus})
 }
 

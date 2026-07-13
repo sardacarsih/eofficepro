@@ -97,10 +97,7 @@ func (h *Handler) processNextNotificationOutbox(ctx context.Context) bool {
 }
 
 func (h *Handler) deliverNotification(ctx context.Context, item notificationEmail) error {
-	link := h.Cfg.WebBaseURL + "/letters/" + item.LetterID
-	if item.EventType == "approval_waiting" {
-		link = h.Cfg.WebBaseURL + "/approvals"
-	}
+	link := h.notificationLink(item)
 	if err := h.Mailer.Send(item.Email, item.Title, item.Body+"\n\nBuka di eOffice Pro:\n"+link); err != nil {
 		return fmt.Errorf("mengirim email: %w", err)
 	}

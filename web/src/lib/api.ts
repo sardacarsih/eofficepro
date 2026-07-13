@@ -21,7 +21,10 @@ export interface User {
   capabilities?: {
     can_approve: boolean;
     can_export_audit: boolean;
+    is_super_admin: boolean;
   };
+  accessible_companies?: AccessibleCompany[];
+  company_roles?: UserCompanyRoleAssignment[];
   positions?: {
     position_id: string;
     title: string;
@@ -36,6 +39,9 @@ export interface User {
 
 export interface OrgUnit {
   id: string;
+	company_id: string;
+	company_code: string;
+	company_name: string;
   parent_id: string | null;
   code: string;
   name: string;
@@ -225,6 +231,30 @@ export async function apiFetch<T>(
 export const getMe = () => apiFetch<User>("/auth/me");
 export const getOrgTree = () =>
   apiFetch<{ tree: OrgUnit[]; total: number }>("/org-units");
+
+export interface OrgUnitPayload {
+  company_id: string;
+  parent_id: string | null;
+  code: string;
+  name: string;
+  unit_level: "office" | "directorate" | "biro" | "department" | "division";
+  region: "HO" | "REG1" | "REG2" | "REPO_JKT" | "REPO_PKB" | null;
+}
+
+export const createOrgUnit = (payload: OrgUnitPayload) =>
+  apiFetch<{ id: string }>("/org-units", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const updateOrgUnit = (unitID: string, payload: OrgUnitPayload) =>
+  apiFetch<{ id: string }>(`/org-units/${unitID}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+export const deactivateOrgUnit = (unitID: string) =>
+  apiFetch<{ id: string }>(`/org-units/${unitID}`, { method: "DELETE" });
 
 export interface Position {
   id: string;
@@ -561,6 +591,11 @@ export interface ApprovalMatrix {
   letter_type_code: string;
   letter_type_name: string;
   originator_level: ApprovalMatrixPositionLevel | null;
+  approval_category_id: string | null;
+  approval_category_name: string | null;
+  resolution_mode: "fixed" | "user_selected" | "scope_derived";
+  min_final_level: ApprovalMatrixFinalLevel | null;
+  max_final_level: ApprovalMatrixFinalLevel | null;
   final_level: ApprovalMatrixFinalLevel;
   flow_mode: "serial";
   is_active: boolean;
@@ -571,6 +606,10 @@ export interface ApprovalMatrix {
 export interface ApprovalMatrixPayload {
   letter_type_id: string;
   originator_level?: ApprovalMatrixPositionLevel | null;
+  approval_category_id?: string | null;
+  resolution_mode?: "fixed" | "user_selected" | "scope_derived";
+  min_final_level?: ApprovalMatrixFinalLevel | null;
+  max_final_level?: ApprovalMatrixFinalLevel | null;
   final_level: ApprovalMatrixFinalLevel;
   flow_mode?: "serial";
   is_active?: boolean;
@@ -630,6 +669,11 @@ export interface DraftLetter {
   on_behalf_of_position_id: string | null;
   on_behalf_of_title: string | null;
   template_id: string | null;
+  approval_category_id: string | null;
+  requested_final_level: ApprovalMatrixFinalLevel | null;
+  resolved_final_level: ApprovalMatrixFinalLevel | null;
+  coordination_scope: string | null;
+  approval_resolution_mode: "user_selected" | "scope_derived" | "fixed" | null;
   version: number;
   body_html: string;
   body_plain: string;
@@ -652,6 +696,8 @@ export interface DraftLetterPayload {
   on_behalf_of_position_id?: string | null;
   template_id?: string | null;
   base_version?: number;
+  approval_category_id?: string | null;
+  requested_final_level?: ApprovalMatrixFinalLevel | null;
   subject: string;
   classification?: LetterType["default_classification"];
   priority: DraftLetter["priority"];
@@ -765,6 +811,75 @@ export async function downloadAuthenticatedFile(path: string, fallbackName: stri
   URL.revokeObjectURL(url);
 }
 
+export interface AccessibleCompany {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface UserCompanyRoleAssignment {
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  role_code: "admin";
+  valid_from: string;
+  valid_to: string | null;
+}
+
+export interface ApprovalCategory {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface ApprovalRoutePreview {
+  resolution_mode: "user_selected" | "scope_derived" | "fixed";
+  final_level: ApprovalMatrixFinalLevel;
+  coordination_scope?: string;
+  allowed_levels: ApprovalMatrixFinalLevel[];
+  steps: SubmitDraftResult["approval_steps"];
+}
+
+export const listApprovalCategories = () =>
+  apiFetch<{ data: ApprovalCategory[] }>("/approval-categories");
+
+export const createApprovalCategory = (payload: { code: string; name: string }) =>
+  apiFetch<{ id: string }>("/approval-categories", { method: "POST", body: JSON.stringify(payload) });
+
+export const updateApprovalCategory = (id: string, payload: { code: string; name: string }) =>
+  apiFetch<{ id: string }>(`/approval-categories/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+export const deactivateApprovalCategory = (id: string) =>
+  apiFetch<{ id: string }>(`/approval-categories/${id}`, { method: "DELETE" });
+
+export interface CoordinationScopeRule {
+  scope: "same_unit" | "cross_department" | "cross_biro" | "cross_directorate" | "corporate";
+  final_level: ApprovalMatrixFinalLevel;
+  is_active: boolean;
+}
+
+export const listCoordinationScopeRules = () =>
+  apiFetch<{ data: CoordinationScopeRule[] }>("/coordination-scope-rules");
+
+export const updateCoordinationScopeRule = (scope: CoordinationScopeRule["scope"], finalLevel: ApprovalMatrixFinalLevel) =>
+  apiFetch<{ scope: string }>(`/coordination-scope-rules/${scope}`, {
+    method: "PUT",
+    body: JSON.stringify({ final_level: finalLevel }),
+  });
+
+export const previewApprovalRoute = (payload: {
+  letter_type_id: string;
+  creator_position_id: string;
+  approval_category_id?: string | null;
+  requested_final_level?: ApprovalMatrixFinalLevel | null;
+  recipients: Omit<DraftRecipient, "label">[];
+}) => apiFetch<ApprovalRoutePreview>("/approval-routes/preview", {
+  method: "POST",
+  body: JSON.stringify(payload),
+});
+
 // ---- Inbox surat masuk ----
 
 export interface IncomingLetter {
@@ -818,6 +933,9 @@ export interface ApprovalInboxItem {
   body_plain: string;
   attachment_count: number;
   updated_at: string;
+  /** true bila item tampil karena delegasi aktif (E03-5), bukan akses langsung. */
+  is_delegated: boolean;
+  delegated_from_title: string | null;
 }
 
 export interface ApprovalActionPayload {
@@ -847,6 +965,71 @@ export const actApprovalStep = (stepID: string, payload: ApprovalActionPayload) 
     method: "POST",
     body: JSON.stringify(payload),
   });
+
+// ---- Delegasi wewenang (E03-5) ----
+
+/** Status delegasi dihitung server dari waktu query — jangan hitung ulang di klien. */
+export type DelegationStatus = "scheduled" | "active" | "expired" | "revoked";
+
+export interface Delegation {
+  id: string;
+  delegator_position_id: string;
+  delegator_position_title: string;
+  delegate_user_id: string;
+  delegate_name: string;
+  reason: string;
+  valid_from: string;
+  valid_to: string;
+  revoked_at: string | null;
+  status: DelegationStatus;
+  created_by_name: string;
+  created_at: string;
+}
+
+export interface DelegateOption {
+  user_id: string;
+  full_name: string;
+  position_titles: string[];
+}
+
+export interface CreateDelegationPayload {
+  delegator_position_id: string;
+  delegate_user_id: string;
+  reason: string;
+  /** RFC3339, mis. hasil Date#toISOString(). */
+  valid_from: string;
+  /** RFC3339, mis. hasil Date#toISOString(). */
+  valid_to: string;
+}
+
+// Respons list tidak dipaginasi ({"data": [...]}); include_past=false (default)
+// menyembunyikan delegasi expired/revoked.
+export const listDelegations = (
+  scope?: "delegator" | "delegate",
+  includePast = false,
+) =>
+  apiFetch<{ data: Delegation[] }>(
+    `/delegations${buildQuery({
+      scope,
+      include_past: includePast || undefined,
+    })}`,
+  );
+
+export const createDelegation = (payload: CreateDelegationPayload) =>
+  apiFetch<{ delegation: Delegation }>("/delegations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const revokeDelegation = (id: string) =>
+  apiFetch<{ delegation: Delegation }>(`/delegations/${id}`, {
+    method: "DELETE",
+  });
+
+export const listDelegateOptions = (positionId: string) =>
+  apiFetch<{ data: DelegateOption[] }>(
+    `/delegations/delegate-options${buildQuery({ position_id: positionId })}`,
+  );
 
 // ---- Disposisi ----
 
@@ -968,6 +1151,9 @@ export interface LetterApprovalAction {
   device_info: string | null;
   created_at: string;
   position_title: string;
+  /** true bila aksi dilakukan delegate atas nama posisi delegator (E03-5). */
+  on_behalf_of: boolean;
+  on_behalf_of_position_title: string | null;
 }
 
 export interface LetterDetail {
@@ -984,6 +1170,11 @@ export interface LetterDetail {
   creator_name: string;
   creator_position_title: string;
   on_behalf_of_title: string | null;
+  approval_category_name: string | null;
+  requested_final_level: string | null;
+  resolved_final_level: string | null;
+  coordination_scope: string | null;
+  approval_resolution_mode: string | null;
   version: number;
   body_html: string;
   body_plain: string;
@@ -997,10 +1188,56 @@ export interface LetterDetail {
   created_at: string;
   updated_at: string;
   published_at: string | null;
+  cancelled_at: string | null;
+  cancelled_by_name: string | null;
+  cancel_reason: string | null;
+  /** Gate tombol batalkan dihitung server-side (pembuat + status cancellable). */
+  can_cancel: boolean;
 }
 
 export const getLetterDetail = (id: string) =>
   apiFetch<{ letter: LetterDetail }>(`/letters/view/${id}`);
+
+// ---- Pembatalan surat oleh pembuat (E03-7) ----
+
+export interface CancelLetterResult {
+  id: string;
+  status: "cancelled";
+  cancelled_at: string;
+  cancelled_by_name: string;
+  cancel_reason: string;
+}
+
+export const cancelLetter = (id: string, reason: string) =>
+  apiFetch<{ letter: CancelLetterResult }>(`/letters/view/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+
+// ---- Komentar internal surat ----
+
+export interface LetterComment {
+  id: string;
+  user_id: string;
+  user_name: string;
+  position_title: string | null;
+  body: string;
+  created_at: string;
+}
+
+export const listLetterComments = (letterID: string, opts: PageParams = {}) =>
+  apiFetch<Paginated<LetterComment>>(
+    `/letters/view/${letterID}/comments${buildQuery({
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 20,
+    })}`,
+  );
+
+export const createLetterComment = (letterID: string, body: string) =>
+  apiFetch<{ comment: LetterComment }>(`/letters/view/${letterID}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
 
 export interface VerifiedLetter {
   id: string;
@@ -1207,6 +1444,7 @@ export interface UserRow {
   status: string;
   roles: string[];
   positions: UserPositionAssignment[];
+  company_roles: UserCompanyRoleAssignment[];
 }
 
 export interface UserPositionAssignment {
@@ -1231,6 +1469,14 @@ export interface UserPayload {
   roles: string[];
   password?: string;
   positions: UserPositionPayload[];
+  company_roles: UserCompanyRolePayload[];
+}
+
+export interface UserCompanyRolePayload {
+  company_id: string;
+  role_code: "admin";
+  valid_from: string;
+  valid_to: string | null;
 }
 
 export interface UserPositionPayload {
