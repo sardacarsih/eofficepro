@@ -39,6 +39,8 @@ type approvalPDFSignature struct {
 	ActorName     string
 	ActedAt       time.Time
 	Image         []byte
+	// OnBehalf true bila aksi dilakukan delegate "a.n." posisi delegator (E03-5).
+	OnBehalf bool
 }
 
 var signatureObjectSegmentRE = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
@@ -150,7 +152,8 @@ func (h *Handler) putApprovalSignatureObject(ctx context.Context, letterID strin
 
 func (h *Handler) loadApprovalPDFSignatures(ctx context.Context, tx pgx.Tx, letterID string) ([]approvalPDFSignature, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT s.step_order, p.title, u.full_name, aa.acted_at, aa.signature_image_key
+		SELECT s.step_order, p.title, u.full_name, aa.acted_at, aa.signature_image_key,
+		       aa.on_behalf_delegation_id IS NOT NULL
 		FROM approval_actions aa
 		JOIN approval_steps s ON s.id = aa.approval_step_id
 		JOIN positions p ON p.id = s.approver_position_id
@@ -173,7 +176,7 @@ func (h *Handler) loadApprovalPDFSignatures(ctx context.Context, tx pgx.Tx, lett
 	for rows.Next() {
 		var item approvalPDFSignature
 		var storageKey string
-		if err := rows.Scan(&item.StepOrder, &item.PositionTitle, &item.ActorName, &item.ActedAt, &storageKey); err != nil {
+		if err := rows.Scan(&item.StepOrder, &item.PositionTitle, &item.ActorName, &item.ActedAt, &storageKey, &item.OnBehalf); err != nil {
 			return nil, err
 		}
 		imageData, err := h.loadSignatureImage(ctx, storageKey)

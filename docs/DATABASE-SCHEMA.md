@@ -114,6 +114,13 @@ Role aplikasi: `admin, creator, secretary, auditor, management_viewer`. Otoritas
 | reason | varchar | cuti/dinas |
 | valid_from / valid_to | timestamptz | otomatis aktif/berakhir |
 | created_by | uuid FK | |
+| revoked_at / revoked_by | timestamptz / uuid FK NULL | pencabutan manual (migrasi 0025, E03-5) |
+
+Status diturunkan dari waktu query (`scheduled/active/expired/revoked`), tanpa
+job. Constraint `delegations_no_overlap` (EXCLUDE gist, butuh `btree_gist`)
+menolak dua delegasi non-revoked yang tumpang tindih untuk posisi yang sama.
+Index partial `idx_delegations_delegate_active(delegate_user_id, valid_from,
+valid_to) WHERE revoked_at IS NULL` mempercepat cek delegasi aktif.
 
 ---
 
@@ -183,6 +190,7 @@ numbering_counters(id, format_id FK, scope_key varchar,  -- mis. 'HRGA-HO|ND|202
 | refers_to_letter_id | uuid NULL | rujukan antar surat (P1-3) |
 | external_ref | varchar NULL | cadangan surat eksternal (P2-1) |
 | published_at / archived_at | timestamptz | |
+| cancelled_at / cancelled_by_user_id / cancel_reason | timestamptz / uuid FK / text NULL | jejak pembatalan oleh pembuat (migrasi 0025, E03-7) |
 | created_at / updated_at | timestamptz | |
 
 **Index penting:** `(status, creator_user_id)`, `(letter_number)`, GIN full-text pada `subject + body` (via `letter_versions` terbaru), `(company_id, published_at)`.

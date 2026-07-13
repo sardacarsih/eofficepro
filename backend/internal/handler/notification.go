@@ -58,11 +58,7 @@ func (h *Handler) sendNotificationEmails(items []notificationEmail) {
 	h.sendNotificationPushes(items)
 	go func() {
 		for _, item := range items {
-			link := h.Cfg.WebBaseURL + "/letters/" + item.LetterID
-			if item.EventType == "approval_waiting" {
-				link = h.Cfg.WebBaseURL + "/approvals"
-			}
-			body := item.Body + "\n\nBuka di eOffice Pro:\n" + link
+			body := item.Body + "\n\nBuka di eOffice Pro:\n" + h.notificationLink(item)
 			if err := h.Mailer.Send(item.Email, item.Title, body); err != nil {
 				log.Printf("email notifikasi gagal ke %s: %v", item.Email, err)
 			}
@@ -130,10 +126,22 @@ func notificationTargetSection(eventType string) string {
 		return "approvals"
 	case "disposition_assigned", "disposition_updated":
 		return "dispositions"
-	case "letter_incoming", "approval_result":
+	case "letter_incoming", "approval_result", "letter_cancelled":
 		return "inbox"
 	default:
 		return "dashboard"
+	}
+}
+
+// notificationLink membangun deep link web untuk email/push notifikasi.
+func (h *Handler) notificationLink(item notificationEmail) string {
+	switch item.EventType {
+	case "approval_waiting":
+		return h.Cfg.WebBaseURL + "/approvals"
+	case "delegation_created", "delegation_revoked":
+		return h.Cfg.WebBaseURL + "/delegations"
+	default:
+		return h.Cfg.WebBaseURL + "/letters/" + item.LetterID
 	}
 }
 
@@ -272,25 +280,49 @@ func (h *Handler) UnregisterPushToken(c *gin.Context) {
 // submit/promote sehingga hanya step yang baru menunggu yang ternotifikasi.
 // Mengembalikan data email untuk dikirim setelah commit.
 func notifyWaitingApprovers(ctx context.Context, tx pgx.Tx, letterID string) ([]notificationEmail, error) {
+	// Target = pemegang aktif posisi step waiting UNION delegate aktif (E03-5);
+	// baris identik ter-dedup oleh UNION + DISTINCT (satu notifikasi per user).
 	rows, err := tx.Query(ctx, `
-		WITH inserted AS (
+		WITH targets AS (
+			SELECT DISTINCT combined.user_id, combined.letter_id, combined.subject,
+			       combined.creator_name, combined.position_title
+			FROM (
+				SELECT up.user_id, l.id AS letter_id, l.subject,
+				       cu.full_name AS creator_name, p.title AS position_title
+				FROM approval_steps s
+				JOIN letters l ON l.id = s.letter_id
+				JOIN users cu ON cu.id = l.creator_user_id
+				JOIN positions p ON p.id = s.approver_position_id
+				JOIN user_positions up ON up.position_id = s.approver_position_id
+				JOIN users u ON u.id = up.user_id
+				WHERE s.letter_id = $1
+				  AND s.status = 'waiting'
+				  AND current_date >= up.valid_from
+				  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+				  AND u.status = 'active'
+				UNION
+				SELECT dg.delegate_user_id, l.id, l.subject, cu.full_name, p.title
+				FROM approval_steps s
+				JOIN letters l ON l.id = s.letter_id
+				JOIN users cu ON cu.id = l.creator_user_id
+				JOIN positions p ON p.id = s.approver_position_id
+				JOIN delegations dg ON dg.delegator_position_id = s.approver_position_id
+				JOIN users u ON u.id = dg.delegate_user_id
+				WHERE s.letter_id = $1
+				  AND s.status = 'waiting'
+				  AND now() >= dg.valid_from AND now() < dg.valid_to
+				  AND dg.revoked_at IS NULL
+				  AND u.status = 'active'
+			) combined
+		),
+		inserted AS (
 			INSERT INTO notifications (user_id, event_type, letter_id, title, body)
-			SELECT DISTINCT up.user_id,
+			SELECT t.user_id,
 			       'approval_waiting',
-			       l.id,
-			       'Menunggu approval: ' || l.subject,
-			       'Surat dari ' || cu.full_name || ' menunggu persetujuan Anda sebagai ' || p.title || '.'
-			FROM approval_steps s
-			JOIN letters l ON l.id = s.letter_id
-			JOIN users cu ON cu.id = l.creator_user_id
-			JOIN positions p ON p.id = s.approver_position_id
-			JOIN user_positions up ON up.position_id = s.approver_position_id
-			JOIN users u ON u.id = up.user_id
-			WHERE s.letter_id = $1
-			  AND s.status = 'waiting'
-			  AND current_date >= up.valid_from
-			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
-			  AND u.status = 'active'
+			       t.letter_id,
+			       'Menunggu approval: ' || t.subject,
+			       'Surat dari ' || t.creator_name || ' menunggu persetujuan Anda sebagai ' || t.position_title || '.'
+			FROM targets t
 			RETURNING user_id, event_type, letter_id, title, body
 		)
 		SELECT u.email, i.event_type, i.letter_id::text, i.title, i.body

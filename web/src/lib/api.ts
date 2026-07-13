@@ -933,6 +933,9 @@ export interface ApprovalInboxItem {
   body_plain: string;
   attachment_count: number;
   updated_at: string;
+  /** true bila item tampil karena delegasi aktif (E03-5), bukan akses langsung. */
+  is_delegated: boolean;
+  delegated_from_title: string | null;
 }
 
 export interface ApprovalActionPayload {
@@ -962,6 +965,71 @@ export const actApprovalStep = (stepID: string, payload: ApprovalActionPayload) 
     method: "POST",
     body: JSON.stringify(payload),
   });
+
+// ---- Delegasi wewenang (E03-5) ----
+
+/** Status delegasi dihitung server dari waktu query — jangan hitung ulang di klien. */
+export type DelegationStatus = "scheduled" | "active" | "expired" | "revoked";
+
+export interface Delegation {
+  id: string;
+  delegator_position_id: string;
+  delegator_position_title: string;
+  delegate_user_id: string;
+  delegate_name: string;
+  reason: string;
+  valid_from: string;
+  valid_to: string;
+  revoked_at: string | null;
+  status: DelegationStatus;
+  created_by_name: string;
+  created_at: string;
+}
+
+export interface DelegateOption {
+  user_id: string;
+  full_name: string;
+  position_titles: string[];
+}
+
+export interface CreateDelegationPayload {
+  delegator_position_id: string;
+  delegate_user_id: string;
+  reason: string;
+  /** RFC3339, mis. hasil Date#toISOString(). */
+  valid_from: string;
+  /** RFC3339, mis. hasil Date#toISOString(). */
+  valid_to: string;
+}
+
+// Respons list tidak dipaginasi ({"data": [...]}); include_past=false (default)
+// menyembunyikan delegasi expired/revoked.
+export const listDelegations = (
+  scope?: "delegator" | "delegate",
+  includePast = false,
+) =>
+  apiFetch<{ data: Delegation[] }>(
+    `/delegations${buildQuery({
+      scope,
+      include_past: includePast || undefined,
+    })}`,
+  );
+
+export const createDelegation = (payload: CreateDelegationPayload) =>
+  apiFetch<{ delegation: Delegation }>("/delegations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const revokeDelegation = (id: string) =>
+  apiFetch<{ delegation: Delegation }>(`/delegations/${id}`, {
+    method: "DELETE",
+  });
+
+export const listDelegateOptions = (positionId: string) =>
+  apiFetch<{ data: DelegateOption[] }>(
+    `/delegations/delegate-options${buildQuery({ position_id: positionId })}`,
+  );
 
 // ---- Disposisi ----
 
@@ -1083,6 +1151,9 @@ export interface LetterApprovalAction {
   device_info: string | null;
   created_at: string;
   position_title: string;
+  /** true bila aksi dilakukan delegate atas nama posisi delegator (E03-5). */
+  on_behalf_of: boolean;
+  on_behalf_of_position_title: string | null;
 }
 
 export interface LetterDetail {
@@ -1117,10 +1188,31 @@ export interface LetterDetail {
   created_at: string;
   updated_at: string;
   published_at: string | null;
+  cancelled_at: string | null;
+  cancelled_by_name: string | null;
+  cancel_reason: string | null;
+  /** Gate tombol batalkan dihitung server-side (pembuat + status cancellable). */
+  can_cancel: boolean;
 }
 
 export const getLetterDetail = (id: string) =>
   apiFetch<{ letter: LetterDetail }>(`/letters/view/${id}`);
+
+// ---- Pembatalan surat oleh pembuat (E03-7) ----
+
+export interface CancelLetterResult {
+  id: string;
+  status: "cancelled";
+  cancelled_at: string;
+  cancelled_by_name: string;
+  cancel_reason: string;
+}
+
+export const cancelLetter = (id: string, reason: string) =>
+  apiFetch<{ letter: CancelLetterResult }>(`/letters/view/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
 
 // ---- Komentar internal surat ----
 

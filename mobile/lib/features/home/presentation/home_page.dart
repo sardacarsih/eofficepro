@@ -36,6 +36,12 @@ String _draftLetterStatusLabel(DraftLetterStatus status) {
   };
 }
 
+String _onBehalfSuffix(LetterApprovalAction action) {
+  if (!action.onBehalfOf) return '';
+  final title = action.onBehalfOfPositionTitle?.trim() ?? '';
+  return title.isEmpty ? ' (a.n.)' : ' (a.n. $title)';
+}
+
 bool canComposeLetters(User? user) {
   return user != null &&
       user.positions.isNotEmpty &&
@@ -448,6 +454,9 @@ class ApprovalListPane extends ConsumerWidget {
                   '${formatDateTime(item.updatedAt)}',
               body: item.bodyPlain,
               priority: item.priority,
+              badge: item.isDelegated
+                  ? 'a.n. ${item.delegatedFromTitle ?? item.positionTitle}'
+                  : null,
               onTap: () => onSelected(item),
             );
           },
@@ -704,6 +713,10 @@ class LetterDetailPane extends ConsumerWidget {
               child: ListView(
                 padding: layout.detailPadding,
                 children: [
+                  if (letter.cancelledAt != null) ...[
+                    _CancellationBanner(letter: letter),
+                    const SizedBox(height: 16),
+                  ],
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -830,7 +843,10 @@ class LetterDetailPane extends ConsumerWidget {
                       dense: true,
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.history),
-                      title: Text('${action.actorName} - ${action.action}'),
+                      title: Text(
+                        '${action.actorName}'
+                        '${_onBehalfSuffix(action)} - ${action.action}',
+                      ),
                       subtitle: Text(
                         '${formatDateTime(action.createdAt)}'
                         '${action.note == null ? "" : "\n${action.note}"}',
@@ -1331,6 +1347,7 @@ class _LetterListCard extends StatelessWidget {
     required this.body,
     required this.priority,
     required this.onTap,
+    this.badge,
   });
 
   final bool selected;
@@ -1340,6 +1357,7 @@ class _LetterListCard extends StatelessWidget {
   final String body;
   final String priority;
   final VoidCallback onTap;
+  final String? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -1372,6 +1390,25 @@ class _LetterListCard extends StatelessWidget {
                     ),
                 ],
               ),
+              if (badge case final badgeLabel?) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: scheme.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    badgeLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onTertiaryContainer,
+                        ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 6),
               Text(
                 subtitle,
@@ -1392,6 +1429,54 @@ class _LetterListCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _CancellationBanner extends StatelessWidget {
+  const _CancellationBanner({required this.letter});
+
+  final LetterDetail letter;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final name = letter.cancelledByName?.trim() ?? '';
+    final reason = letter.cancelReason?.trim() ?? '';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.cancel_outlined, color: scheme.onErrorContainer),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Dibatalkan oleh ${name.isEmpty ? "-" : name}'
+                  '${reason.isEmpty ? "" : ": $reason"}',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  formatDateTime(letter.cancelledAt),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

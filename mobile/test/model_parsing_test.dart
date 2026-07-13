@@ -102,6 +102,82 @@ void main() {
 
     expect(letter.subject, 'Uji');
     expect(letter.recipients.single.label, 'Direktur');
+    expect(letter.cancelledAt, isNull);
+    expect(letter.cancelledByName, isNull);
+    expect(letter.cancelReason, isNull);
+    expect(letter.canCancel, isFalse);
+  });
+
+  test('parses approval inbox item delegation fields with defaults', () {
+    final delegated = ApprovalInboxItem.fromJson({
+      'step_id': 's-1',
+      'letter_id': 'l-1',
+      'subject': 'Uji delegasi',
+      'position_title': 'Direktur Keuangan',
+      'is_delegated': true,
+      'delegated_from_title': 'Direktur Keuangan',
+    });
+    expect(delegated.isDelegated, isTrue);
+    expect(delegated.delegatedFromTitle, 'Direktur Keuangan');
+
+    final direct = ApprovalInboxItem.fromJson({
+      'step_id': 's-2',
+      'letter_id': 'l-2',
+      'subject': 'Tanpa field baru',
+    });
+    expect(direct.isDelegated, isFalse);
+    expect(direct.delegatedFromTitle, isNull);
+  });
+
+  test('parses approval action on-behalf fields with defaults', () {
+    final onBehalf = LetterApprovalAction.fromJson({
+      'id': 'a-1',
+      'step_id': 's-1',
+      'action': 'approve',
+      'actor_name': 'Delegate',
+      'created_at': '2026-07-12T08:00:00Z',
+      'position_title': 'Direktur Keuangan',
+      'on_behalf_of': true,
+      'on_behalf_of_position_title': 'Direktur Keuangan',
+    });
+    expect(onBehalf.onBehalfOf, isTrue);
+    expect(onBehalf.onBehalfOfPositionTitle, 'Direktur Keuangan');
+
+    final direct = LetterApprovalAction.fromJson({
+      'id': 'a-2',
+      'step_id': 's-2',
+      'action': 'approve',
+      'actor_name': 'Approver',
+      'created_at': '2026-07-12T08:00:00Z',
+      'position_title': 'GM Biro',
+    });
+    expect(direct.onBehalfOf, isFalse);
+    expect(direct.onBehalfOfPositionTitle, isNull);
+  });
+
+  test('parses letter detail cancellation trace and can_cancel', () {
+    final letter = LetterDetail.fromJson({
+      'id': 'l-1',
+      'subject': 'Dibatalkan',
+      'status': 'cancelled',
+      'cancelled_at': '2026-07-12T10:00:00Z',
+      'cancelled_by_name': 'Creator',
+      'cancel_reason': 'Salah lampiran',
+      'can_cancel': false,
+    });
+    expect(letter.cancelledAt, '2026-07-12T10:00:00Z');
+    expect(letter.cancelledByName, 'Creator');
+    expect(letter.cancelReason, 'Salah lampiran');
+    expect(letter.canCancel, isFalse);
+
+    final cancellable = LetterDetail.fromJson({
+      'id': 'l-2',
+      'subject': 'Masih bisa dibatalkan',
+      'status': 'in_approval',
+      'can_cancel': true,
+    });
+    expect(cancellable.cancelledAt, isNull);
+    expect(cancellable.canCancel, isTrue);
   });
 
   test('parses dashboard summary with trend and letter id', () {

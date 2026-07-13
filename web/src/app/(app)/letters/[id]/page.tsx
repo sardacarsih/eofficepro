@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ApiError,
+  cancelLetter,
   createDisposition,
   createLetterComment,
 	  downloadAuthenticatedFile,
@@ -25,6 +26,7 @@ import Pagination from "@/components/Pagination";
 import { useCurrentUser } from "@/components/layout/CurrentUserProvider";
 
 const COMMENT_MAX_LENGTH = 2000;
+const CANCEL_REASON_MAX_LENGTH = 1000;
 
 const STATUS_LABEL: Record<LetterDetail["status"], string> = {
   draft: "Draft",
@@ -159,6 +161,10 @@ export default function LetterDetailPage() {
   const [commentBody, setCommentBody] = useState("");
   const [postingComment, setPostingComment] = useState(false);
   const [commentSubmitError, setCommentSubmitError] = useState<string | null>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const myPositions = useMemo(() => me?.positions ?? [], [me]);
   const selectedFromPositionID =
@@ -341,6 +347,37 @@ export default function LetterDetailPage() {
     }
   }
 
+  async function handleCancelLetter(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reason = cancelReason.trim();
+    if (!reason) {
+      setCancelError("Alasan pembatalan wajib diisi.");
+      return;
+    }
+    // Hitung per code point agar konsisten dengan validasi rune di server.
+    if (Array.from(reason).length > CANCEL_REASON_MAX_LENGTH) {
+      setCancelError(`Alasan maksimal ${CANCEL_REASON_MAX_LENGTH} karakter.`);
+      return;
+    }
+
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await cancelLetter(params.id, reason);
+      // Refresh detail: banner jejak dan hilangnya tombol datang dari server.
+      const data = await getLetterDetail(params.id);
+      setLetter(data.letter);
+      setCancelDialogOpen(false);
+      setCancelReason("");
+    } catch (err) {
+      setCancelError(
+        err instanceof Error ? err.message : "Gagal membatalkan surat",
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   async function handleCreateComment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const body = commentBody.trim();
@@ -408,6 +445,29 @@ export default function LetterDetailPage() {
               <p className="mt-2 font-mono text-sm text-navy-600 dark:text-sky-400">
                 {letter.letter_number ?? "Nomor belum terbit"}
               </p>
+              {letter.cancelled_at && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+                  <p className="font-semibold">
+                    Dibatalkan oleh {letter.cancelled_by_name ?? "pembuat"}
+                    {letter.cancel_reason ? `: ${letter.cancel_reason}` : ""}
+                  </p>
+                  <p className="mt-1 text-xs">
+                    Dibatalkan pada {formatDate(letter.cancelled_at)}
+                  </p>
+                </div>
+              )}
+              {letter.can_cancel && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCancelDialogOpen(true);
+                    setCancelError(null);
+                  }}
+                  className="mt-3 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+                >
+                  Batalkan Surat
+                </button>
+              )}
             </div>
 
             <div className="grid gap-5 px-6 py-5">
@@ -880,6 +940,11 @@ export default function LetterDetailPage() {
                         <p className="font-semibold text-zinc-800 dark:text-zinc-200">
                           {ACTION_LABEL[action.action]} oleh {action.actor_name}
                         </p>
+                        {action.on_behalf_of && (
+                          <p className="mt-0.5 font-semibold text-cyan-700 dark:text-cyan-300">
+                            a.n. {action.on_behalf_of_position_title ?? step.position_title}
+                          </p>
+                        )}
                         <p className="mt-1 text-zinc-500">
                           {formatDate(action.created_at)}
                           {action.note ? ` · ${action.note}` : ""}
@@ -998,6 +1063,82 @@ export default function LetterDetailPage() {
               </form>
             </section>
           </aside>
+
+          {cancelDialogOpen && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="letter-cancel-title"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/45 px-4 py-6"
+            >
+              <form
+                onSubmit={handleCancelLetter}
+                className="w-full max-w-md rounded-xl bg-white shadow-2xl dark:bg-zinc-900"
+              >
+                <header className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+                  <h2
+                    id="letter-cancel-title"
+                    className="text-lg font-semibold text-zinc-950 dark:text-zinc-50"
+                  >
+                    Batalkan Surat
+                  </h2>
+                  <p className="mt-1 text-sm text-zinc-500">{letter.subject}</p>
+                </header>
+
+                <div className="grid gap-3 px-5 py-5">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                    Surat yang dibatalkan tidak menerima nomor dan approval yang
+                    masih menunggu akan dilewati. Tindakan ini tidak dapat
+                    diurungkan.
+                  </p>
+                  <label className="grid gap-1 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                    Alasan pembatalan
+                    <textarea
+                      value={cancelReason}
+                      onChange={(event) => setCancelReason(event.target.value)}
+                      disabled={cancelling}
+                      required
+                      rows={3}
+                      maxLength={CANCEL_REASON_MAX_LENGTH}
+                      placeholder="Tuliskan alasan pembatalan"
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/15 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:disabled:bg-zinc-900"
+                    />
+                    <span className="text-xs font-normal text-zinc-500">
+                      {Array.from(cancelReason).length}/{CANCEL_REASON_MAX_LENGTH}
+                    </span>
+                  </label>
+                  {cancelError && (
+                    <p
+                      role="alert"
+                      className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+                    >
+                      {cancelError}
+                    </p>
+                  )}
+                </div>
+
+                <footer className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!cancelling) setCancelDialogOpen(false);
+                    }}
+                    disabled={cancelling}
+                    className="h-10 rounded-lg border border-zinc-300 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={cancelling}
+                    className="h-10 rounded-lg bg-red-700 px-4 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                  >
+                    {cancelling ? "Membatalkan..." : "Batalkan Surat"}
+                  </button>
+                </footer>
+              </form>
+            </div>
+          )}
         </>
       )}
     </main>

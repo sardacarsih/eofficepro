@@ -53,6 +53,12 @@ const NAV_ITEMS: NavItem[] = [
     roles: null,
     isVisible: (user) => user?.capabilities?.can_approve === true,
   },
+  {
+    href: "/delegations",
+    label: "Delegasi",
+    icon: CornerUpRightIcon,
+    roles: null,
+  },
   { href: "/organization", label: "Organisasi", icon: BuildingIcon, roles: null },
   { href: "/companies", label: "Perusahaan", icon: BuildingIcon, roles: ["admin"] },
   { href: "/positions", label: "Jabatan", icon: BriefcaseIcon, roles: ["admin"] },

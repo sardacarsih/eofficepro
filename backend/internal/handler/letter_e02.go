@@ -1209,7 +1209,12 @@ func writeApprovalSignaturesBlock(pdf *gofpdf.Fpdf, signatures []approvalPDFSign
 
 		pdf.SetXY(colX, imageY+18)
 		pdf.SetFont("Arial", "B", 8)
-		pdf.MultiCell(columnWidth, 4, strings.TrimSpace(signature.ActorName), "", "C", false)
+		actorName := strings.TrimSpace(signature.ActorName)
+		if signature.OnBehalf {
+			// Delegasi E03-5: delegate menandatangani "a.n." posisi delegator.
+			actorName = "a.n. " + actorName
+		}
+		pdf.MultiCell(columnWidth, 4, actorName, "", "C", false)
 		pdf.SetX(colX)
 		pdf.SetFont("Arial", "I", 7)
 		pdf.MultiCell(columnWidth, 4, signature.ActedAt.Format("02/01/2006 15:04 MST"), "", "C", false)

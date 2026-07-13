@@ -13,10 +13,16 @@ import { BellIcon } from "./icons";
 
 const POLL_INTERVAL_MS = 60_000;
 
-// Tujuan klik notifikasi: approver diarahkan ke inbox approval, sisanya ke
-// detail surat bila ada.
+// Tujuan klik notifikasi: approver diarahkan ke inbox approval, notifikasi
+// delegasi ke halaman delegasi (letter_id NULL), sisanya ke detail surat.
 function notificationHref(item: AppNotification): string | null {
   if (item.event_type === "approval_waiting") return "/approvals";
+  if (
+    item.event_type === "delegation_created" ||
+    item.event_type === "delegation_revoked"
+  ) {
+    return "/delegations";
+  }
   if (item.letter_id) return `/letters/${item.letter_id}`;
   return null;
 }

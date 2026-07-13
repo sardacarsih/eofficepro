@@ -208,6 +208,11 @@ export default function ApprovalsPage() {
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
                         {CLASSIFICATION_LABEL[item.classification]}
                       </span>
+                      {item.is_delegated && (
+                        <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-semibold text-cyan-800 dark:bg-cyan-950 dark:text-cyan-300">
+                          a.n. {item.delegated_from_title ?? item.position_title}
+                        </span>
+                      )}
                     </div>
                     <h2 className="text-base font-semibold text-zinc-950 dark:text-zinc-50">
                       {item.subject}

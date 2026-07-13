@@ -55,13 +55,25 @@ func (h *Handler) insertSLAReminders(ctx context.Context) ([]notificationEmail, 
 			  AND now() < s.sla_deadline
 		),
 		targets AS (
-			SELECT DISTINCT up.user_id, d.letter_id, d.subject, d.sla_deadline
-			FROM due d
-			JOIN user_positions up ON up.position_id = d.approver_position_id
-			JOIN users u ON u.id = up.user_id
-			WHERE current_date >= up.valid_from
-			  AND (up.valid_to IS NULL OR current_date < up.valid_to)
-			  AND u.status = 'active'
+			SELECT DISTINCT user_id, letter_id, subject, sla_deadline
+			FROM (
+				SELECT up.user_id, d.letter_id, d.subject, d.sla_deadline
+				FROM due d
+				JOIN user_positions up ON up.position_id = d.approver_position_id
+				JOIN users u ON u.id = up.user_id
+				WHERE current_date >= up.valid_from
+				  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+				  AND u.status = 'active'
+				UNION
+				-- Delegate aktif (E03-5) ikut diingatkan.
+				SELECT dg.delegate_user_id, d.letter_id, d.subject, d.sla_deadline
+				FROM due d
+				JOIN delegations dg ON dg.delegator_position_id = d.approver_position_id
+				JOIN users u ON u.id = dg.delegate_user_id
+				WHERE now() >= dg.valid_from AND now() < dg.valid_to
+				  AND dg.revoked_at IS NULL
+				  AND u.status = 'active'
+			) combined
 		),
 		inserted AS (
 			INSERT INTO notifications (user_id, event_type, letter_id, title, body)
@@ -108,6 +120,15 @@ func (h *Handler) insertSLAEscalations(ctx context.Context) ([]notificationEmail
 				JOIN users u ON u.id = up.user_id
 				WHERE current_date >= up.valid_from
 				  AND (up.valid_to IS NULL OR current_date < up.valid_to)
+				  AND u.status = 'active'
+				UNION ALL
+				-- Delegate aktif (E03-5) menerima eskalasi sebagai penindak lanjut.
+				SELECT dg.delegate_user_id, d.letter_id, d.subject, d.position_title, false AS is_superior
+				FROM due d
+				JOIN delegations dg ON dg.delegator_position_id = d.approver_position_id
+				JOIN users u ON u.id = dg.delegate_user_id
+				WHERE now() >= dg.valid_from AND now() < dg.valid_to
+				  AND dg.revoked_at IS NULL
 				  AND u.status = 'active'
 				UNION ALL
 				SELECT up.user_id, d.letter_id, d.subject, d.position_title, true AS is_superior
