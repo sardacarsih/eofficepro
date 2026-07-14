@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func TestListUsersIncludesMultipleActiveAssignments_Integration(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/users", nil)
+	c.Set(middleware.CtxUserID, fixture.actorUserID)
 
 	h.ListUsers(c)
 
@@ -42,7 +44,7 @@ func TestListUsersIncludesMultipleActiveAssignments_Integration(t *testing.T) {
 		Users []struct {
 			ID        string                   `json:"id"`
 			Positions []userPositionAssignment `json:"positions"`
-		} `json:"users"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("json.Unmarshal(ListUsers response) error: %v", err)
@@ -505,7 +507,7 @@ func TestUpdateUserCanReactivateSamePositionEndedToday_Integration(t *testing.T)
 		"email":"upd` + fixture.suffix + `@example.test",
 		"full_name":"Updated Holder",
 		"status":"active",
-		"roles":["admin"],
+		"roles":["creator"],
 		"positions":[{"position_id":"` + positionID + `","assignment_type":"definitive"}]
 	}`)
 	rec := httptest.NewRecorder()
@@ -600,6 +602,8 @@ func TestDeactivateUserWithReplacementTransfersDraft_Integration(t *testing.T) {
 	}
 }
 
+var userPositionFixtureSeq atomic.Int64
+
 type userPositionFixture struct {
 	db          *pgxpool.Pool
 	actorUserID string
@@ -624,10 +628,18 @@ func newUserPositionFixture(t *testing.T) (*Handler, *userPositionFixture) {
 		t.Fatalf("pgxpool.New(%q) error: %v", databaseURL, err)
 	}
 
-	suffix := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	// Millisecond komponen + counter atomic: unik dalam satu proses test,
+	// menghindari tabrakan kode fixture (mis. companies.code) antar test.
+	suffix := fmt.Sprintf("%03d%03d", time.Now().UnixMilli()%1000, userPositionFixtureSeq.Add(1)%1000)
 	fixture := &userPositionFixture{db: db, suffix: suffix}
 	fixture.companyID = fixture.insertCompany(t)
 	fixture.actorUserID = fixture.insertUser(t, "ACTOR", "Position Admin")
+	if _, err := db.Exec(ctx, `
+		INSERT INTO user_company_roles (user_id, company_id, role_id)
+		SELECT $1, $2, id FROM roles WHERE code = 'admin'`,
+		fixture.actorUserID, fixture.companyID); err != nil {
+		t.Fatalf("grant company admin role error: %v", err)
+	}
 
 	t.Cleanup(func() {
 		fixture.cleanup(t)
@@ -788,6 +800,14 @@ func (f *userPositionFixture) cleanup(t *testing.T) {
 	}
 	if _, err := f.db.Exec(ctx, `DELETE FROM org_units WHERE company_id = $1`, f.companyID); err != nil {
 		t.Logf("cleanup org units error: %v", err)
+	}
+	if _, err := f.db.Exec(ctx, `
+		DELETE FROM user_company_roles
+		WHERE user_id = ANY($1::uuid[]) OR company_id = $2`, f.cleanupIDs, f.companyID); err != nil {
+		t.Logf("cleanup user company roles error: %v", err)
+	}
+	if _, err := f.db.Exec(ctx, `DELETE FROM user_roles WHERE user_id = ANY($1::uuid[])`, f.cleanupIDs); err != nil {
+		t.Logf("cleanup user roles error: %v", err)
 	}
 	if _, err := f.db.Exec(ctx, `DELETE FROM users WHERE id = ANY($1::uuid[])`, f.cleanupIDs); err != nil {
 		t.Logf("cleanup users error: %v", err)

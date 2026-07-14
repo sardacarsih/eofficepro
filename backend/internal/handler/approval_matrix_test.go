@@ -46,7 +46,7 @@ func TestApprovalMatrixCRUD_Integration(t *testing.T) {
 	t.Run("list includes letter type labels", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodGet, "/approval-matrices?include_inactive=true", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/approval-matrices?include_inactive=true&page_size=100", nil)
 
 		h.ListApprovalMatrices(c)
 
@@ -54,7 +54,7 @@ func TestApprovalMatrixCRUD_Integration(t *testing.T) {
 			t.Fatalf("ListApprovalMatrices status = %d, body = %s", rec.Code, rec.Body.String())
 		}
 		var got struct {
-			Matrices []ApprovalMatrix `json:"approval_matrices"`
+			Matrices []ApprovalMatrix `json:"data"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("json.Unmarshal(list response) error: %v", err)

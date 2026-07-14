@@ -84,3 +84,14 @@ pemenang di tiap iterasi, surat batal tanpa nomor).
   hidup + APK; disarankan sebelum rilis.
 - 11 kegagalan pre-existing company-scope perlu ticket tersendiri (di luar
   scope E03-5/E03-7).
+
+## Addendum 2026-07-14
+
+- 11 kegagalan pre-existing terselesaikan: akar masalahnya fixture test usang
+  (actor tanpa role admin `user_company_roles`, envelope respons lama
+  `users`/`approval_matrices` vs `{data, meta}`, dan ketergantungan pada letter
+  type seed KOR yang kini `scope_derived`) — bukan bug produk. Suite backend
+  penuh hijau 3 run beruntun.
+- Temuan #3 (kegagalan transien) dijelaskan dan diperbaiki: suffix
+  `newUserPositionFixture` berbasis `UnixNano()%1e6` bisa tabrakan antar test
+  dalam satu run; kini memakai komponen milidetik + counter atomic.
