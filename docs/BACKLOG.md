@@ -21,6 +21,7 @@
 | ID | Ticket | AC singkat | SP |
 |----|--------|-----------|----|
 | E00-1 | Setup repo, CI/CD, environment dev/staging/prod | Pipeline build+test otomatis; deploy staging 1 klik | 5 |
+|  | ↳ Progres 14 Jul 2026: CI GitHub Actions aktif (`.github/workflows/ci.yml`) — backend go vet+test integrasi (Postgres 16 service + migrasi), web lint+build, mobile analyze+test, pada push `main` dan semua PR. Deploy staging/prod belum. | | |
 | E00-2 | Arsitektur dasar API (REST, versioning, error format standar) | ADR tertulis; skeleton API jalan | 5 |
 | E00-3 | Setup database + migration tooling | Migration up/down teruji | 3 |
 | E00-4 | Object storage lampiran (S3-compatible/MinIO) + enkripsi at-rest | Upload/download via pre-signed URL | 5 |
