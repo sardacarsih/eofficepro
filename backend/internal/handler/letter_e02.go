@@ -1435,7 +1435,13 @@ func normalizeMIMEType(value string) string {
 }
 
 func safeObjectFileName(name string) string {
-	name = filepath.Base(strings.TrimSpace(name))
+	name = strings.TrimSpace(name)
+	// Klien Windows bisa mengirim path lengkap ber-backslash; filepath.Base
+	// di server Linux hanya mengenali '/', jadi buang kedua jenis pemisah.
+	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = filepath.Base(name)
 	if name == "." || name == "" {
 		return "lampiran"
 	}

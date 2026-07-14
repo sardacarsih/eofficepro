@@ -29,7 +29,12 @@ func TestSecretaryCanSubmitDraftToDirectorApproval_Integration(t *testing.T) {
 	fixture.insertUserPosition(t, directorUserID, directorPositionID, "definitive")
 	fixture.insertUserPosition(t, secretaryUserID, secretaryPositionID, "definitive")
 
-	letterTypeID := fixture.activeLetterTypeID(t)
+	letterTypeID := fixture.insertLetterType(t, "TS")
+	if _, err := fixture.db.Exec(ctx, `
+		INSERT INTO approval_matrices (letter_type_id, final_level, flow_mode, is_active)
+		VALUES ($1, 'director', 'serial', true)`, letterTypeID); err != nil {
+		t.Fatalf("insert approval matrix error: %v", err)
+	}
 
 	router := gin.New()
 	asSecretary := func(c *gin.Context) {
