@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -22,7 +23,28 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 	}
 
 	r := gin.New()
+	// Temuan QA E10-3 (Medium): default gin mempercayai semua proxy sehingga
+	// klien langsung bisa memalsukan X-Forwarded-For dan mem-bypass rate limit
+	// per-IP. Default aman: tidak mempercayai proxy mana pun (ClientIP() =
+	// RemoteAddr — benar untuk koneksi langsung di dev). Produksi di belakang
+	// reverse proxy mengisi TRUSTED_PROXIES dengan CIDR/IP proxy-nya
+	// (mis. "10.0.0.0/8").
+	trustedProxies := cfg.TrustedProxies // kosong -> nil -> tidak percaya proxy
+	if len(trustedProxies) == 0 {
+		trustedProxies = nil
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		log.Fatalf("TRUSTED_PROXIES tidak valid (%v): %v", cfg.TrustedProxies, err)
+	}
 	r.Use(gin.Logger(), gin.Recovery())
+	// Header keamanan untuk API JSON (nosniff, frame DENY, CSP none, no-store
+	// pada /api/, HSTS hanya production). Catatan CSRF: perlindungan CSRF tidak
+	// berlaku by design — autentikasi memakai Bearer token pada header
+	// Authorization (web menyimpan token di memori/storage, bukan cookie),
+	// sehingga tidak ada kredensial ambient yang dikirim otomatis lintas
+	// origin; browser juga tidak menyertakan header Authorization tanpa CORS
+	// allow. Tidak ada middleware CSRF yang perlu dipasang.
+	r.Use(middleware.SecurityHeaders(cfg.AppEnv == "production"))
 	corsCfg := cors.Config{
 		// Dev: web Next.js di port 3000. Production diatur lewat reverse proxy.
 		AllowOrigins:     []string{"http://localhost:3000", "http://127.0.0.1:3000"},
@@ -59,16 +81,21 @@ func NewRouter(cfg *config.Config, st *store.Store) (*gin.Engine, *handler.Handl
 
 	api := r.Group("/api/v1")
 
-	// Publik
-	api.POST("/auth/login", h.Login)
-	api.POST("/auth/refresh", h.Refresh)
+	// Publik. Endpoint auth publik dibatasi per IP (fixed window Redis,
+	// fail-open); kunci: ratelimit:auth:<ip>.
+	authRateLimit := middleware.RateLimitByIP(st.Redis, "auth", cfg.RateLimitAuthPerMinute)
+	api.POST("/auth/login", authRateLimit, h.Login)
+	api.POST("/auth/refresh", authRateLimit, h.Refresh)
 	api.POST("/auth/logout", h.Logout)
-	api.POST("/auth/forgot-password", h.ForgotPassword)
-	api.POST("/auth/reset-password", h.ResetPassword)
+	api.POST("/auth/forgot-password", authRateLimit, h.ForgotPassword)
+	api.POST("/auth/reset-password", authRateLimit, h.ResetPassword)
 	api.GET("/verify/:token", h.VerifyLetter)
 
-	// Terproteksi
-	authed := api.Group("", middleware.RequireAuth(h.Tokens))
+	// Terproteksi: rate limit per user (kunci ratelimit:api:<user>) setelah
+	// RequireAuth, lalu validasi dini param path id/*_id non-UUID -> 404.
+	authed := api.Group("", middleware.RequireAuth(h.Tokens),
+		middleware.RateLimitByUser(st.Redis, "api", cfg.RateLimitAPIPerMinute),
+		middleware.ValidateUUIDPathParams())
 	authed.GET("/auth/me", h.Me)
 	authed.POST("/auth/logout-all", h.LogoutAll)
 	authed.POST("/auth/change-password", h.ChangePassword)

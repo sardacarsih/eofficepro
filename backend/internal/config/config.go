@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -41,6 +42,16 @@ type Config struct {
 	FirebaseCredentialsFile       string
 	FirebaseCredentialsJSON       string
 	FirebaseCloudMessagingEnabled bool
+
+	// Rate limit fixed-window per menit (Redis, fail-open). 0 = nonaktif.
+	// Auth = endpoint auth publik per IP; API = endpoint terautentikasi per user.
+	RateLimitAuthPerMinute int
+	RateLimitAPIPerMinute  int
+
+	// TrustedProxies: daftar CIDR/IP reverse proxy yang dipercaya untuk header
+	// X-Forwarded-For (dipisah koma). Kosong (default) = tidak mempercayai
+	// proxy mana pun; ClientIP() memakai alamat koneksi langsung (RemoteAddr).
+	TrustedProxies []string
 }
 
 func Load() (*Config, error) {
@@ -70,6 +81,9 @@ func Load() (*Config, error) {
 		FirebaseCredentialsFile:       getEnv("FIREBASE_CREDENTIALS_FILE", ""),
 		FirebaseCredentialsJSON:       getEnv("FIREBASE_CREDENTIALS_JSON", ""),
 		FirebaseCloudMessagingEnabled: getEnvBool("FIREBASE_CLOUD_MESSAGING_ENABLED", false),
+		RateLimitAuthPerMinute:        getEnvInt("RATE_LIMIT_AUTH_PER_MINUTE", 15),
+		RateLimitAPIPerMinute:         getEnvInt("RATE_LIMIT_API_PER_MINUTE", 300),
+		TrustedProxies:                getEnvList("TRUSTED_PROXIES"),
 	}
 
 	if cfg.AppEnv != "development" && cfg.JWTSecret == "" {
@@ -96,6 +110,18 @@ func getEnvBool(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+// getEnvList membaca daftar dipisah koma; spasi dipangkas, item kosong
+// dibuang. Env kosong / tidak diisi menghasilkan nil.
+func getEnvList(key string) []string {
+	var values []string
+	for _, part := range strings.Split(os.Getenv(key), ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 func getEnvInt(key string, fallback int) int {

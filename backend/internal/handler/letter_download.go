@@ -21,16 +21,19 @@ func (h *Handler) DownloadLetterAttachment(c *gin.Context) {
 	attachmentID := c.Param("attachment_id")
 	userID := c.GetString(middleware.CtxUserID)
 	ctx := c.Request.Context()
-	if h.Minio == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "object storage belum tersedia"})
-		return
-	}
+	// Akses diperiksa sebelum ketersediaan storage: penolakan otorisasi selalu
+	// 404 + tercatat, tanpa membocorkan keadaan object storage.
 	if ok, err := h.userCanDownloadLetter(ctx, userID, letterID); err != nil || !ok {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses unduh"})
 		} else {
+			h.auditLetterAccessDenied(ctx, userID, letterID, "download_attachment", c.ClientIP())
 			c.JSON(http.StatusNotFound, gin.H{"error": "lampiran tidak ditemukan"})
 		}
+		return
+	}
+	if h.Minio == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "object storage belum tersedia"})
 		return
 	}
 	var storageKey, fileName, mimeType, scanStatus string
@@ -58,16 +61,19 @@ func (h *Handler) DownloadFinalLetterPDF(c *gin.Context) {
 	letterID := c.Param("id")
 	userID := c.GetString(middleware.CtxUserID)
 	ctx := c.Request.Context()
-	if h.Minio == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "object storage belum tersedia"})
-		return
-	}
+	// Akses diperiksa sebelum ketersediaan storage: penolakan otorisasi selalu
+	// 404 + tercatat, tanpa membocorkan keadaan object storage.
 	if ok, err := h.userCanDownloadLetter(ctx, userID, letterID); err != nil || !ok {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memeriksa akses unduh"})
 		} else {
+			h.auditLetterAccessDenied(ctx, userID, letterID, "download_pdf", c.ClientIP())
 			c.JSON(http.StatusNotFound, gin.H{"error": "PDF final tidak ditemukan"})
 		}
+		return
+	}
+	if h.Minio == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "object storage belum tersedia"})
 		return
 	}
 	var key, number string
