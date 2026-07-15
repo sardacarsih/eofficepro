@@ -1,6 +1,6 @@
 # E03-7 — Pembatalan surat oleh pembuat sebelum approval final
 
-Status: contract-stable
+Status: integrated
 
 Tujuan:
 

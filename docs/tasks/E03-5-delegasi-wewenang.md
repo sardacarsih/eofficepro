@@ -1,6 +1,6 @@
 # E03-5 — Delegasi wewenang berbatas waktu + pencatatan "a.n."
 
-Status: contract-stable
+Status: integrated
 
 Tujuan:
 
