@@ -66,9 +66,9 @@
 | E03-2 | Konfigurasi approval matrix oleh admin (jenis surat → level akhir, serial/paralel) | Tanpa coding | 8 |
 | E03-3 | Aksi approver: Setujui / Tolak (alasan wajib) / Minta Revisi | Approver tidak bisa edit isi | 5 |
 | E03-4 | Alur revisi: kembali ke pembuat, versi isi surat ter-track | Diff antar versi terlihat | 5 |
-| E03-5 | Delegasi wewenang berbatas waktu + pencatatan "a.n." | Aktif/berakhir otomatis sesuai tanggal | 5 |
+| E03-5 | ✅ (14 Jul 2026) Delegasi wewenang berbatas waktu + pencatatan "a.n." | Aktif/berakhir otomatis sesuai tanggal — endpoint delegasi (buat/daftar/revoke/opsi), status derived scheduled/active/expired/revoked, larangan overlap (23P01→409), resolusi delegate di engine approval + "a.n." pada inbox/timeline/PDF. Lihat `docs/tasks/E03-5-delegasi-wewenang.md` | 5 |
 | E03-6 | SLA per jenis surat + reminder 50%/100% + eskalasi ke atasan | Ref P0-8 | 5 |
-| E03-7 | Pembatalan surat oleh pembuat (sebelum approval final) dengan jejak | | 2 |
+| E03-7 | ✅ (14 Jul 2026) Pembatalan surat oleh pembuat (sebelum approval final) dengan jejak | `POST /letters/view/:id/cancel` (alasan wajib), hanya pembuat + status draft/revision/in_approval, step pending→skipped, surat batal `letter_number` tetap NULL (race cancel-vs-approve aman via lock), jejak `cancelled_at/by/reason` + flag `can_cancel`. Lihat `docs/tasks/E03-7-pembatalan-surat.md` | 2 |
 | E03-8 | Mode sekretaris: draft atas nama pimpinan, konfirmasi pimpinan sebelum diajukan | Ref user story #12 | 5 |
 
 ## EPIC 04 — Penomoran Otomatis (P0-4)
