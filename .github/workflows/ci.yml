@@ -43,6 +43,27 @@ jobs:
         env:
           EOFFICE_INTEGRATION_DB_URL: postgres://eoffice:eoffice_ci@localhost:5432/eoffice?sslmode=disable
 
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: govulncheck (backend)
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm audit (web)
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
   web:
     name: Web (Next.js)
     runs-on: ubuntu-latest

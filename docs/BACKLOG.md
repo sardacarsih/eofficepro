@@ -133,9 +133,9 @@
 
 | ID | Ticket | AC singkat | SP |
 |----|--------|-----------|----|
-| E10-1 | Enforcement klasifikasi Biasa/Terbatas/Rahasia di semua endpoint | Uji akses URL langsung ditolak & tercatat | 5 |
+| E10-1 | ✅ (14 Jul 2026) Enforcement klasifikasi Biasa/Terbatas/Rahasia di semua endpoint | Uji akses URL langsung ditolak & tercatat — enforcement terverifikasi konsisten di detail/inbox/search/dashboard/unduh/komentar; penolakan kini tercatat `access_denied` di audit_logs. Lihat `docs/LAPORAN-UJI-E10-1-E10-3.md` | 5 |
 | E10-2 | Watermark PDF (nama pembuka) untuk kelas Rahasia | | 3 |
-| E10-3 | Rate limiting, CSRF, security headers, dependency audit | | 3 |
+| E10-3 | ✅ (14 Jul 2026) Rate limiting, CSRF, security headers, dependency audit | Rate limit Redis (auth 15/mnt per IP + `TRUSTED_PROXIES`, API 300/mnt per user), security headers, CSRF n/a by design (Bearer header), govulncheck+npm audit di CI, path id non-UUID → 404 | 3 |
 | E10-4 | Penetration test internal + perbaikan temuan | Sebelum go-live pilot | 8 |
 
 ## EPIC 11 — Pilot & Rollout — Fase 3

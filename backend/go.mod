@@ -2,6 +2,8 @@ module github.com/kskgroup/eofficepro
 
 go 1.25.0
 
+toolchain go1.25.12
+
 require (
 	firebase.google.com/go/v4 v4.21.0
 	github.com/boombuler/barcode v1.0.0
@@ -82,7 +84,7 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/richardlehane/mscfb v1.0.7 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/rs/xid v1.6.0 // indirect

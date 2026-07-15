@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -87,6 +89,7 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 		return
 	}
 	if !allowed {
+		h.auditLetterAccessDenied(ctx, userID, letterID, "detail", c.ClientIP())
 		c.JSON(http.StatusNotFound, gin.H{"error": "surat tidak ditemukan"})
 		return
 	}
@@ -192,6 +195,22 @@ func (h *Handler) GetLetterDetail(c *gin.Context) {
 	detail.ApprovalActions = actions
 
 	c.JSON(http.StatusOK, gin.H{"letter": detail})
+}
+
+// auditLetterAccessDenied mencatat percobaan akses surat yang ditolak ke
+// audit_logs (append-only, hanya INSERT). Bentuk INSERT..SELECT memastikan
+// pencatatan hanya terjadi bila surat memang ada — dalam satu query — sehingga
+// id acak yang tidak ada tidak menghasilkan spam audit, sementara respons ke
+// klien tetap 404 tanpa membocorkan keberadaan surat.
+func (h *Handler) auditLetterAccessDenied(ctx context.Context, userID string, letterID string, via string, ip string) {
+	detailJSON, _ := json.Marshal(map[string]string{"via": via})
+	if _, err := h.DB.Exec(ctx, `
+		INSERT INTO audit_logs (entity_type, entity_id, action, actor_user_id, detail, ip_address)
+		SELECT 'letter', l.id, 'access_denied', $2, $3, $4
+		FROM letters l
+		WHERE l.id = $1`, letterID, userID, detailJSON, ip); err != nil {
+		log.Printf("audit access_denied gagal (letter via %s): %v", via, err)
+	}
 }
 
 func (h *Handler) userCanViewLetter(ctx context.Context, userID string, letterID string) (bool, error) {
